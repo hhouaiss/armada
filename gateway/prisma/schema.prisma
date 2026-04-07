@@ -1,0 +1,319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  stores        Store[]
+  sessions      Session[]
+  integrations  Integration[]
+  llmApiKeys    LLMApiKey[]
+  skills        Skill[]
+
+  @@map("users")
+}
+
+model Store {
+  id              String    @id @default(cuid())
+  shopifyDomain   String    @unique
+  shopifyStoreId  String?   @unique
+  storeName       String
+  accessToken     String    // Encrypted
+  scope           String
+  installedAt     DateTime  @default(now())
+  lastSyncAt      DateTime?
+  isActive        Boolean   @default(true)
+
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  agents                Agent[]
+  operations            Operation[]
+  chatMessages          ChatMessage[]
+  conversationSessions  ConversationSession[]
+  routingRules          RoutingRule[]
+
+  @@index([userId])
+  @@map("stores")
+}
+
+model Agent {
+  id              String   @id @default(cuid())
+  agentId         String   // e.g., "{storeId}:product-agent"
+  name            String
+  type            String   // 'product' | 'inventory' | 'support' | 'marketing'
+
+  // Legacy field (kept for backward compatibility)
+  personality     String   @db.Text
+
+  // OpenClaw-style customizable personality (Phase 2)
+  systemPrompt    String?  @db.Text  // Full system prompt with personality
+  capabilities    Json?                // Tool access config: { allowed: [], denied: [] }
+  customRules     String?  @db.Text  // Additional instructions/rules
+
+  // Template system for white-label (Phase 2)
+  templateId      String?              // Reference to template: "shopify-product", "notion-assistant"
+
+  // Multi-model support
+  modelProvider   String   @default("anthropic") // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together'
+  modelName       String   @default("claude-sonnet-4-5-20250929") // Model ID for the provider
+
+  isActive        Boolean  @default(true)
+  config          Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  operations              Operation[]
+  conversationSessions    ConversationSession[]
+  routingRules            RoutingRule[]
+  skills                  AgentSkill[]
+
+  @@unique([storeId, type])
+  @@index([storeId])
+  @@index([type])
+  @@map("agents")
+}
+
+model Operation {
+  id              String    @id @default(cuid())
+  operationId     String    @unique // WebSocket operation ID
+  action          String    // 'product_list', 'inventory_update', etc.
+  params          Json
+  result          Json?
+  status          String    // 'pending' | 'in_progress' | 'completed' | 'failed'
+  error           String?   @db.Text
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  duration        Int?      // milliseconds
+
+  storeId         String
+  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  agentId         String?
+  agent           Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, status])
+  @@index([agentId])
+  @@index([startedAt])
+  @@map("operations")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Integration {
+  id              String   @id @default(cuid())
+  platform        String   // 'anthropic' | 'telegram' | 'whatsapp' | 'notion' | 'google_drive'
+  credentials     Json     // Encrypted credentials
+  isActive        Boolean  @default(true)
+  lastUsed        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@map("integrations")
+}
+
+model PlatformConfig {
+  id              String   @id @default(cuid())
+  name            String   @default("StoreTeam")
+  tagline         String?
+  logoUrl         String?
+  primaryColor    String   @default("#FF8C42")
+  accentColor     String?
+  domain          String?
+  features        Json     @default("{}")
+  agentTypes      Json     @default("[]")
+  toolCategories  Json     @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("platform_config")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  storeId   String
+  agentId   String
+  sender    String   // 'user' | 'agent'
+  content   String   @db.Text
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, agentId, createdAt])
+  @@map("chat_messages")
+}
+
+model ConversationSession {
+  id              String   @id @default(cuid())
+  conversationId  String   // "telegram:123456" | "websocket:user-abc" | "default"
+  agentId         String
+  storeId         String
+  history         Json     // Array of Anthropic MessageParam objects
+  lastMessageAt   DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  agent           Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, agentId])
+  @@index([agentId, lastMessageAt])
+  @@index([storeId])
+  @@map("conversation_sessions")
+}
+
+model AgentTemplate {
+  id              String   @id @default(cuid())
+  templateId      String   @unique  // "shopify-product", "shopify-inventory", "notion-assistant"
+  name            String
+  description     String   @db.Text
+  category        String   // "ecommerce", "crm", "knowledge", "support"
+
+  // Template content (OpenClaw AGENTS.md / SOUL.md equivalent)
+  systemPrompt    String   @db.Text  // Base system prompt
+  personality     String   @db.Text  // Personality traits
+  defaultRules    String?  @db.Text  // Default rules/instructions
+
+  // Tool configuration
+  capabilities    Json     // { allowed: ["product_*"], denied: ["product_delete"] }
+
+  // Metadata
+  icon            String?  // Emoji or icon identifier
+  isPublic        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([category])
+  @@map("agent_templates")
+}
+
+model LLMApiKey {
+  id          String   @id @default(cuid())
+  provider    String   // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together' | 'moonshot' | 'minimax'
+  apiKey      String   @db.Text // Encrypted API key
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@map("llm_api_keys")
+}
+
+model RoutingRule {
+  id          String   @id @default(cuid())
+  storeId     String
+  agentId     String?  // If null, this is a fallback rule
+  priority    Int      @default(0)  // Higher = more specific, evaluated first
+
+  // Matching conditions (OpenClaw binding pattern)
+  channel     String?  // "websocket" | "telegram" | "whatsapp" | null (any)
+  userId      String?  // Specific user ID
+  peerId      String?  // Telegram chat ID, phone number, etc.
+
+  // Context-aware matching (Phase 3 - Smart Routing)
+  keywords    Json?    // Array of keywords to match: ["product", "inventory"]
+  intentPattern String? // Regex pattern for message content
+  actionType  String?  // "product_*" | "inventory_*" | "customer_*"
+
+  // Metadata
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  agent       Agent?   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, priority])
+  @@index([storeId, isActive])
+  @@map("routing_rules")
+}
+
+// Agent Skills - Persistent knowledge and capabilities for agents
+model Skill {
+  id          String   @id @default(cuid())
+  name        String   // e.g., "supplier-email-templates", "brand-voice-guide"
+  description String   @db.Text // What this skill provides and when to use it
+  content     String   @db.Text // Markdown content with instructions, examples, templates
+
+  // Skill metadata
+  type        String   @default("knowledge") // 'knowledge' | 'template' | 'guideline' | 'example'
+  category    String?  // 'communication' | 'branding' | 'product' | 'inventory' | 'support'
+  icon        String?  // Emoji icon
+
+  // Versioning and learning
+  version     Int      @default(1)
+  isActive    Boolean  @default(true)
+
+  // Ownership
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Relations
+  agents      AgentSkill[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([type])
+  @@index([category])
+  @@map("skills")
+}
+
+// Many-to-many relation between Agents and Skills
+model AgentSkill {
+  id        String   @id @default(cuid())
+
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  skillId   String
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  // Skill loading priority (higher priority skills loaded first)
+  priority  Int      @default(0)
+
+  // Whether this skill is active for this agent
+  isActive  Boolean  @default(true)
+
+  assignedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([agentId, skillId])
+  @@index([agentId])
+  @@index([skillId])
+  @@map("agent_skills")
+}

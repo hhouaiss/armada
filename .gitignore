@@ -1,0 +1,53 @@
+# ─── Sensitive / Environment ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.*.example
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ─── Markdown docs (not pushed) ────────────────────────────────────────────────
+*.md
+
+# ─── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ─── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# ─── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Claude / AI tooling ───────────────────────────────────────────────────────
+.claude/
+.mcp.json
+
+# ─── Prisma generated ──────────────────────────────────────────────────────────
+web/prisma/migrations/
+gateway/prisma/migrations/
+
+# ─── Misc ──────────────────────────────────────────────────────────────────────
+*.local
+.turbo/
+coverage/
+.nyc_output/
