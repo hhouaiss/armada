@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 // Load environment variables
 config({ path: '.env.local' });
@@ -246,7 +246,7 @@ async function main() {
         systemPrompt: template.systemPrompt,
         personality: template.personality,
         defaultRules: template.defaultRules,
-        capabilities: template.capabilities,
+        capabilities: template.capabilities ?? Prisma.JsonNull,
         icon: template.icon,
       },
     });
