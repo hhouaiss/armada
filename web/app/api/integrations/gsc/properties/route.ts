@@ -1,157 +1,120 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 import { prisma } from '@/lib/prisma';
 import { encryptToken, decryptToken } from '@/lib/shopify';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 
-async function getDefaultUserId(): Promise<string | null> {
-  const user = await prisma.user.findFirst({ where: { email: 'demo@storeteam.ai' } });
-  return user?.id ?? null;
+async function getAuthenticatedUser(request: NextRequest) {
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => request.cookies.getAll(),
+        setAll: () => {},
+      },
+    }
+  );
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  return prisma.user.findFirst({ where: { supabase_auth_id: user.id } });
 }
 
-async function getDecryptedCredentials() {
-  const userId = await getDefaultUserId();
-  if (!userId) return null;
-
+async function getCredentials(userId: string) {
   const integration = await prisma.integration.findUnique({
-    where: {
-      userId_platform: {
-        userId,
-        platform: 'google-search-console',
-      },
-    },
+    where: { userId_platform: { userId, platform: 'google-search-console' } },
   });
-
-  if (!integration || !integration.isActive) return null;
+  if (!integration?.isActive) return null;
 
   const encrypted = (integration.credentials as any)?.encrypted;
   if (!encrypted) return null;
 
-  const decrypted = decryptToken(encrypted);
-  return JSON.parse(decrypted);
+  return JSON.parse(decryptToken(encrypted));
 }
 
-async function refreshAccessToken(credentials: any) {
-  if (!credentials.refresh_token) {
-    throw new Error('No refresh token available');
-  }
+async function getValidCredentials(userId: string) {
+  let creds = await getCredentials(userId);
+  if (!creds) return null;
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
+  const isExpired = creds.expiry_date && Date.now() >= creds.expiry_date - 60000;
+  if (!isExpired) return creds;
+
+  if (!creds.refresh_token) throw new Error('No refresh token');
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       client_id: GOOGLE_CLIENT_ID,
       client_secret: GOOGLE_CLIENT_SECRET,
-      refresh_token: credentials.refresh_token,
+      refresh_token: creds.refresh_token,
       grant_type: 'refresh_token',
     }),
   });
 
-  if (!response.ok) {
-    throw new Error('Failed to refresh Google access token');
-  }
+  if (!res.ok) throw new Error('Token refresh failed');
 
-  const tokens = await response.json();
+  const tokens = await res.json();
+  creds = { ...creds, access_token: tokens.access_token, expiry_date: Date.now() + tokens.expires_in * 1000 };
 
-  const updated = {
-    ...credentials,
-    access_token: tokens.access_token,
-    expiry_date: Date.now() + (tokens.expires_in * 1000),
-  };
+  await prisma.integration.update({
+    where: { userId_platform: { userId, platform: 'google-search-console' } },
+    data: { credentials: { encrypted: encryptToken(JSON.stringify(creds)) }, lastUsed: new Date() },
+  });
 
-  // Persist updated tokens
-  const encryptedCredentials = encryptToken(JSON.stringify(updated));
-  const userId = await getDefaultUserId();
-  if (userId) {
-    await prisma.integration.update({
-      where: {
-        userId_platform: { userId, platform: 'google-search-console' },
-      },
-      data: {
-        credentials: { encrypted: encryptedCredentials },
-        lastUsed: new Date(),
-      },
-    });
-  }
-
-  return updated;
+  return creds;
 }
 
-async function getValidAccessToken(credentials: any) {
-  const isExpired = credentials.expiry_date && Date.now() >= credentials.expiry_date - 60000;
-  if (isExpired) {
-    return refreshAccessToken(credentials);
-  }
-  return credentials;
-}
-
-// GET /api/integrations/gsc/properties - List available GSC properties
-export async function GET() {
+// GET /api/integrations/gsc/properties — list available GSC properties
+export async function GET(request: NextRequest) {
   try {
-    let credentials = await getDecryptedCredentials();
-    if (!credentials) {
-      return NextResponse.json({ error: 'Google Search Console not connected' }, { status: 401 });
-    }
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    credentials = await getValidAccessToken(credentials);
+    const creds = await getValidCredentials(user.id);
+    if (!creds) return NextResponse.json({ error: 'Google Search Console not connected' }, { status: 401 });
 
-    const response = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
-      headers: {
-        Authorization: `Bearer ${credentials.access_token}`,
-      },
+    const res = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+      headers: { Authorization: `Bearer ${creds.access_token}` },
     });
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('GSC sites API error:', err);
+    if (!res.ok) {
+      console.error('GSC sites API error:', await res.text());
       return NextResponse.json({ error: 'Failed to fetch GSC properties' }, { status: 502 });
     }
 
-    const data = await response.json();
+    const data = await res.json();
     const sites = (data.siteEntry || []).map((site: any) => ({
       siteUrl: site.siteUrl,
       permissionLevel: site.permissionLevel,
     }));
 
-    return NextResponse.json({
-      sites,
-      selectedProperty: credentials.selected_property || null,
-    });
+    return NextResponse.json({ sites, selectedProperty: creds.selected_property ?? null });
   } catch (err) {
     console.error('GSC properties fetch error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// POST /api/integrations/gsc/properties - Save selected property
+// POST /api/integrations/gsc/properties — save selected property
 export async function POST(request: NextRequest) {
   try {
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { siteUrl } = await request.json();
-    if (!siteUrl) {
-      return NextResponse.json({ error: 'siteUrl is required' }, { status: 400 });
-    }
+    if (!siteUrl) return NextResponse.json({ error: 'siteUrl is required' }, { status: 400 });
 
-    let credentials = await getDecryptedCredentials();
-    if (!credentials) {
-      return NextResponse.json({ error: 'Google Search Console not connected' }, { status: 401 });
-    }
+    const creds = await getCredentials(user.id);
+    if (!creds) return NextResponse.json({ error: 'Google Search Console not connected' }, { status: 401 });
 
-    const updated = { ...credentials, selected_property: siteUrl };
-    const encryptedCredentials = encryptToken(JSON.stringify(updated));
-    const userId = await getDefaultUserId();
-    if (!userId) {
-      return NextResponse.json({ error: 'User not found' }, { status: 500 });
-    }
-
+    const updated = { ...creds, selected_property: siteUrl };
     await prisma.integration.update({
-      where: {
-        userId_platform: { userId, platform: 'google-search-console' },
-      },
-      data: {
-        credentials: { encrypted: encryptedCredentials },
-        lastUsed: new Date(),
-      },
+      where: { userId_platform: { userId: user.id, platform: 'google-search-console' } },
+      data: { credentials: { encrypted: encryptToken(JSON.stringify(updated)) }, lastUsed: new Date() },
     });
 
     return NextResponse.json({ ok: true, selected_property: siteUrl });

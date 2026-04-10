@@ -1,65 +1,70 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
-import { encryptToken } from '@/lib/shopify';
+import { encryptToken, decryptToken } from '@/lib/shopify';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 
-async function getOrCreateDefaultUser() {
-  let user = await prisma.user.findFirst({ where: { email: 'demo@storeteam.ai' } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: { email: 'demo@storeteam.ai', name: 'Demo User' },
-    });
+function verifyState(state: string): { userId: string } | null {
+  try {
+    const decoded = Buffer.from(state, 'base64url').toString();
+    const parts = decoded.split('|');
+    if (parts.length !== 4) return null;
+
+    const [userId, nonce, ts, sig] = parts;
+    const payload = `${userId}|${nonce}|${ts}`;
+    const expectedSig = crypto
+      .createHmac('sha256', process.env.ENCRYPTION_KEY!)
+      .update(payload)
+      .digest('hex');
+
+    if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+      return null;
+    }
+
+    // Expire after 15 minutes
+    if (Date.now() - parseInt(ts) > 15 * 60 * 1000) return null;
+
+    return { userId };
+  } catch {
+    return null;
   }
-  return user;
 }
 
 export async function GET(request: NextRequest) {
-  // Derive redirect URI from the actual request — must match what was sent to Google
   const origin = new URL(request.url).origin;
   const REDIRECT_URI = `${origin}/api/auth/google/callback`;
+  const settings = `${origin}/settings?tab=integrations`;
 
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get('code');
   const state = searchParams.get('state');
   const error = searchParams.get('error');
 
-  console.log('[GSC OAuth] Callback hit');
-  console.log('[GSC OAuth] Origin:', origin);
-  console.log('[GSC OAuth] Redirect URI:', REDIRECT_URI);
-  console.log('[GSC OAuth] error param:', error);
-  console.log('[GSC OAuth] state from Google:', state);
-  console.log('[GSC OAuth] code present:', !!code);
+  // Ignore stray hits (no params — can happen from other OAuth flows)
+  if (!code && !error && !state) {
+    return NextResponse.redirect(settings);
+  }
 
-  // Handle user denial
   if (error) {
-    console.log('[GSC OAuth] User denied access:', error);
-    return NextResponse.redirect(new URL('/config?gsc=denied', request.url));
+    return NextResponse.redirect(`${settings}&gsc=denied`);
   }
 
-  // Verify CSRF state
-  const storedState = request.cookies.get('google_oauth_state')?.value;
-  console.log('[GSC OAuth] stored state cookie:', storedState ?? '(none)');
-  console.log('[GSC OAuth] state match:', state === storedState);
-
-  if (!state || state !== storedState) {
-    console.error('[GSC OAuth] State mismatch — possible causes:');
-    console.error('  1. Cookie was not stored before redirect to Google');
-    console.error('  2. Browser blocked the cookie');
-    console.error('  3. Different origin/port than when the flow started');
-    console.error(`  Expected: ${state}, Got: ${storedState ?? '(empty)'}`);
-    return NextResponse.redirect(new URL('/config?gsc=error&reason=state', request.url));
+  if (!code || !state) {
+    return NextResponse.redirect(`${settings}&gsc=error&reason=invalid_request`);
   }
 
-  if (!code) {
-    console.error('[GSC OAuth] No code in callback');
-    return NextResponse.redirect(new URL('/config?gsc=error&reason=no_code', request.url));
+  // Verify HMAC-signed state — no cookie dependency
+  const stateData = verifyState(state);
+  if (!stateData) {
+    console.error('[GSC OAuth] Invalid or expired state');
+    return NextResponse.redirect(`${settings}&gsc=error&reason=state`);
   }
 
   try {
-    console.log('[GSC OAuth] Exchanging code for tokens...');
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    // Exchange code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -71,51 +76,60 @@ export async function GET(request: NextRequest) {
       }),
     });
 
-    if (!tokenResponse.ok) {
-      const err = await tokenResponse.text();
-      console.error('[GSC OAuth] Token exchange failed:', tokenResponse.status, err);
-      return NextResponse.redirect(new URL('/config?gsc=error&reason=token', request.url));
+    if (!tokenRes.ok) {
+      const body = await tokenRes.text();
+      console.error('[GSC OAuth] Token exchange failed:', tokenRes.status, body);
+      return NextResponse.redirect(`${settings}&gsc=error&reason=token`);
     }
 
-    const tokens = await tokenResponse.json();
-    console.log('[GSC OAuth] Token exchange success. Has refresh_token:', !!tokens.refresh_token);
+    const tokens = await tokenRes.json();
+
+    // Resolve the Prisma user from the Supabase auth ID embedded in state
+    const user = await prisma.user.findFirst({
+      where: { supabase_auth_id: stateData.userId },
+    });
+    if (!user) {
+      console.error('[GSC OAuth] No Prisma user for supabase_auth_id:', stateData.userId);
+      return NextResponse.redirect(`${settings}&gsc=error&reason=user_not_found`);
+    }
+
+    // Preserve refresh_token and selected_property from existing credentials
+    const existing = await prisma.integration.findUnique({
+      where: { userId_platform: { userId: user.id, platform: 'google-search-console' } },
+    });
+    let existingCreds: { refresh_token?: string; selected_property?: string | null } = {};
+    if (existing) {
+      try {
+        existingCreds = JSON.parse(decryptToken((existing.credentials as { encrypted: string }).encrypted));
+      } catch { /* start fresh */ }
+    }
 
     const credentials = {
       access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
+      refresh_token: tokens.refresh_token ?? existingCreds.refresh_token ?? null,
       token_type: tokens.token_type,
-      expiry_date: Date.now() + (tokens.expires_in * 1000),
-      selected_property: null,
+      expiry_date: Date.now() + tokens.expires_in * 1000,
+      selected_property: existingCreds.selected_property ?? null,
     };
 
-    const encryptedCredentials = encryptToken(JSON.stringify(credentials));
-    const user = await getOrCreateDefaultUser();
-    console.log('[GSC OAuth] Saving for user:', user.email, '(id:', user.id + ')');
-
     await prisma.integration.upsert({
-      where: {
-        userId_platform: { userId: user.id, platform: 'google-search-console' },
-      },
+      where: { userId_platform: { userId: user.id, platform: 'google-search-console' } },
       create: {
         userId: user.id,
         platform: 'google-search-console',
-        credentials: { encrypted: encryptedCredentials },
+        credentials: { encrypted: encryptToken(JSON.stringify(credentials)) },
         isActive: true,
       },
       update: {
-        credentials: { encrypted: encryptedCredentials },
+        credentials: { encrypted: encryptToken(JSON.stringify(credentials)) },
         isActive: true,
         updatedAt: new Date(),
       },
     });
 
-    console.log('[GSC OAuth] ✓ Integration saved. Redirecting to /config?gsc=connected');
-
-    const response = NextResponse.redirect(new URL('/config?gsc=connected', request.url));
-    response.cookies.delete('google_oauth_state');
-    return response;
+    return NextResponse.redirect(`${settings}&gsc=connected`);
   } catch (err) {
     console.error('[GSC OAuth] Callback error:', err);
-    return NextResponse.redirect(new URL('/config?gsc=error&reason=server', request.url));
+    return NextResponse.redirect(`${settings}&gsc=error&reason=server`);
   }
 }

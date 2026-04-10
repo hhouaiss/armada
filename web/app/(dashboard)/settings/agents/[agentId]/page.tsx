@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Bot, Zap, AlertCircle, Check, Loader2 } from 'lucide-react';
+import { ArrowLeft, Bot, Zap, AlertCircle, Check, Loader2, Shuffle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 
@@ -65,6 +65,11 @@ export default function AgentSettingsPage() {
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-5-20250929');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // ClawXRouter state
+  const [routingMode, setRoutingMode] = useState<'fixed' | 'auto'>('fixed');
+  const [autoSimpleModel, setAutoSimpleModel] = useState('google/gemma-4-31b-it');
+  const [autoComplexModel, setAutoComplexModel] = useState('moonshotai/kimi-k2.5');
+
   // Skills management
   const [allSkills, setAllSkills] = useState<any[]>([]);
   const [agentSkills, setAgentSkills] = useState<any[]>([]);
@@ -83,6 +88,9 @@ export default function AgentSettingsPage() {
       setAgent(data.agent);
       setSelectedProvider(data.agent.modelProvider || 'anthropic');
       setSelectedModel(data.agent.modelName || 'claude-sonnet-4-5-20250929');
+      setRoutingMode(data.agent.routingMode || 'fixed');
+      setAutoSimpleModel(data.agent.autoSimpleModel || 'google/gemma-4-31b-it');
+      setAutoComplexModel(data.agent.autoComplexModel || 'moonshotai/kimi-k2.5');
     } catch (error) {
       console.error('Failed to load agent:', error);
     } finally {
@@ -158,6 +166,9 @@ export default function AgentSettingsPage() {
         body: JSON.stringify({
           modelProvider: selectedProvider,
           modelName: selectedModel,
+          routingMode,
+          autoSimpleModel,
+          autoComplexModel,
         }),
       });
 
@@ -192,9 +203,12 @@ export default function AgentSettingsPage() {
   }
 
   const personality = agentPersonalities[agent.type] || { name: agent.name, role: agent.type, defaultTask: '' };
-  const providerHasKey = apiKeys.some((k: any) => k.provider === selectedProvider);
+  const providerHasKey = routingMode === 'auto'
+    ? apiKeys.some((k: any) => k.provider === 'openrouter')
+    : apiKeys.some((k: any) => k.provider === selectedProvider);
   const selectedProviderData = PROVIDERS[selectedProvider as keyof typeof PROVIDERS];
   const selectedModelData = selectedProviderData?.models.find((m) => m.id === selectedModel);
+  const openrouterHasKey = apiKeys.some((k: any) => k.provider === 'openrouter');
 
   return (
     <div className="min-h-screen bg-background text-foreground p-6 space-y-6">
@@ -232,173 +246,325 @@ export default function AgentSettingsPage() {
           </p>
         </div>
 
-        {/* Provider Selection */}
+        {/* Routing Mode Toggle */}
         <div>
-          <label className="text-sm text-muted-foreground uppercase tracking-wide mb-3 block">Provider</label>
+          <label className="text-sm text-muted-foreground uppercase tracking-wide mb-3 block">Mode</label>
           <div className="grid grid-cols-2 gap-4">
-            {Object.entries(PROVIDERS).map(([providerId, provider]) => {
-              const hasKey = apiKeys.some((k: any) => k.provider === providerId);
-              const isSelected = selectedProvider === providerId;
-
-              // Ollama not configured → render as a link to settings instead of disabled button
-              if (!hasKey && providerId === 'ollama') {
-                return (
-                  <Link
-                    key={providerId}
-                    href="/settings?tab=api-keys"
-                    className="p-4 rounded-lg border border-border bg-card text-left hover:border-[#FF6B35]/50 transition-all"
-                  >
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="text-2xl">{provider.icon}</div>
-                      <div className="text-sm font-bold text-foreground uppercase tracking-wide">{provider.name}</div>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-[#FF6B35]">
-                      <AlertCircle className="w-3 h-3" />
-                      <span>Configurer l'URL dans Settings →</span>
-                    </div>
-                  </Link>
-                );
-              }
-
-              return (
-                <button
-                  key={providerId}
-                  onClick={() => {
-                    setSelectedProvider(providerId);
-                    const defaultModel = provider.models[1] || provider.models[0];
-                    setSelectedModel(defaultModel.id);
-                  }}
-                  disabled={!hasKey}
-                  className={`p-4 rounded-lg border transition-all text-left ${
-                    isSelected
-                      ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
-                      : hasKey
-                      ? 'bg-card border-border hover:border-border'
-                      : 'bg-card border-border opacity-50 cursor-not-allowed'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="text-2xl">{provider.icon}</div>
-                    <div className="text-sm font-bold text-foreground uppercase tracking-wide">{provider.name}</div>
-                  </div>
-                  {!hasKey && (
-                    <div className="flex items-center gap-2 text-xs text-yellow-400">
-                      <AlertCircle className="w-3 h-3" />
-                      <span>API Key Required</span>
-                    </div>
-                  )}
-                  {hasKey && isSelected && (
-                    <div className="flex items-center gap-2 text-xs text-[#FF6B35]">
-                      <Check className="w-3 h-3" />
-                      <span>Selected</span>
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {Object.values(PROVIDERS).every(
-            (_, i) => !apiKeys.some((k: any) => k.provider === Object.keys(PROVIDERS)[i])
-          ) && (
-            <div className="mt-4 bg-blue-950/20 border border-blue-500/20 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm text-blue-300 font-medium mb-1">No API Keys Configured</p>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    You need to add at least one API key to use AI models.
-                  </p>
-                  <Link
-                    href="/settings/models"
-                    className="inline-block px-4 py-2 rounded bg-[#FF6B35] text-white text-sm font-medium hover:bg-[#FF6B35]/90 transition-colors uppercase tracking-wide"
-                  >
-                    Add API Key
-                  </Link>
-                </div>
+            <button
+              onClick={() => setRoutingMode('fixed')}
+              className={`p-4 rounded-lg border transition-all text-left ${
+                routingMode === 'fixed'
+                  ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
+                  : 'bg-card border-border hover:border-[#FF6B35]/30'
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <Bot className="w-5 h-5 text-foreground" />
+                <div className="text-sm font-bold text-foreground uppercase tracking-wide">Fixed Model</div>
               </div>
-            </div>
-          )}
+              <div className="text-xs text-muted-foreground">Toujours le même modèle, quel que soit le type de requête.</div>
+              {routingMode === 'fixed' && (
+                <div className="flex items-center gap-2 text-xs text-[#FF6B35] mt-2">
+                  <Check className="w-3 h-3" />
+                  <span>Actif</span>
+                </div>
+              )}
+            </button>
+
+            <button
+              onClick={() => setRoutingMode('auto')}
+              className={`p-4 rounded-lg border transition-all text-left ${
+                routingMode === 'auto'
+                  ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
+                  : 'bg-card border-border hover:border-[#FF6B35]/30'
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <Shuffle className="w-5 h-5 text-foreground" />
+                <div className="text-sm font-bold text-foreground uppercase tracking-wide">Auto Routing</div>
+              </div>
+              <div className="text-xs text-muted-foreground">Modèle léger pour les requêtes simples, Kimi K2.5 pour les tâches complexes.</div>
+              {routingMode === 'auto' && (
+                <div className="flex items-center gap-2 text-xs text-[#FF6B35] mt-2">
+                  <Check className="w-3 h-3" />
+                  <span>Actif — -70% coûts estimés</span>
+                </div>
+              )}
+            </button>
+          </div>
         </div>
 
-        {/* Model Selection */}
-        {providerHasKey && (
+        {/* Auto Routing Config */}
+        {routingMode === 'auto' && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
+            className="space-y-6"
           >
-            <label className="text-sm text-muted-foreground uppercase tracking-wide mb-3 block">Model</label>
-            <div className="space-y-3">
-              {selectedProviderData?.models.map((model) => {
-                const isSelected = selectedModel === model.id;
+            {!openrouterHasKey && (
+              <div className="bg-yellow-950/20 border border-yellow-500/20 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-yellow-300 font-medium mb-1">Clé OpenRouter requise</p>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      L'Auto Routing utilise OpenRouter pour les deux modèles. Ajoutez votre clé pour activer cette fonctionnalité.
+                    </p>
+                    <Link
+                      href="/settings/models"
+                      className="inline-block px-4 py-2 rounded bg-[#FF6B35] text-white text-sm font-medium hover:bg-[#FF6B35]/90 transition-colors uppercase tracking-wide"
+                    >
+                      Ajouter la clé OpenRouter
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            )}
 
-                return (
+            {/* Simple model picker */}
+            <div>
+              <label className="text-sm text-muted-foreground uppercase tracking-wide mb-1 block">
+                Modèle simple
+              </label>
+              <p className="text-xs text-muted-foreground mb-3">
+                Utilisé pour les requêtes courtes et les lookups de données (listes, comptages, recherches).
+              </p>
+              <div className="space-y-2">
+                {PROVIDERS.openrouter.models.map((model) => (
                   <button
                     key={model.id}
-                    onClick={() => setSelectedModel(model.id)}
+                    onClick={() => setAutoSimpleModel(model.id)}
                     className={`w-full p-4 rounded-lg border transition-all text-left ${
-                      isSelected
+                      autoSimpleModel === model.id
                         ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
-                        : 'bg-card border-border hover:border-border'
+                        : 'bg-card border-border hover:border-[#FF6B35]/30'
                     }`}
                   >
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <div className="text-foreground font-bold mb-1">{model.name}</div>
-                        <div className="text-xs text-muted-foreground">{model.description}</div>
-                      </div>
+                    <div className="flex items-start justify-between mb-1">
+                      <div className="text-foreground font-bold text-sm">{model.name}</div>
                       <div className="flex items-center gap-2">
-                        <span
-                          className={`text-xs px-2 py-1 rounded uppercase tracking-wide ${
-                            model.tier === 'Premium'
-                              ? 'bg-purple-950/50 text-purple-300 border border-purple-500/20'
-                              : model.tier === 'Balanced'
-                              ? 'bg-blue-950/50 text-blue-300 border border-blue-500/20'
-                              : model.tier === 'Free'
-                              ? 'bg-emerald-950/50 text-emerald-300 border border-emerald-500/20'
-                              : 'bg-green-950/50 text-green-300 border border-green-500/20'
-                          }`}
-                        >
+                        <span className="text-xs px-2 py-1 rounded uppercase tracking-wide bg-green-950/50 text-green-300 border border-green-500/20">
                           {model.tier}
                         </span>
-                        {isSelected && <Check className="w-5 h-5 text-[#FF6B35]" />}
+                        {autoSimpleModel === model.id && <Check className="w-4 h-4 text-[#FF6B35]" />}
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground">{model.pricing}</div>
                   </button>
-                );
-              })}
+                ))}
+              </div>
             </div>
 
-            {/* Cost Comparison */}
-            {selectedModelData && (
-              <div className="mt-4 bg-muted/30 border border-border rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <Zap className="w-5 h-5 text-[#FF6B35] flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm text-foreground font-medium mb-1">Selected: {selectedModelData.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {selectedModelData.tier === 'Fast' && (
-                        <>
-                          Most cost-effective option. Great for high-volume, straightforward tasks like inventory
-                          monitoring and customer data organization.
-                        </>
+            {/* Complex model picker */}
+            <div>
+              <label className="text-sm text-muted-foreground uppercase tracking-wide mb-1 block">
+                Modèle complexe
+              </label>
+              <p className="text-xs text-muted-foreground mb-3">
+                Utilisé pour les analyses, rédactions, stratégies et tâches multi-étapes.
+              </p>
+              <div className="space-y-2">
+                {PROVIDERS.openrouter.models.map((model) => (
+                  <button
+                    key={model.id}
+                    onClick={() => setAutoComplexModel(model.id)}
+                    className={`w-full p-4 rounded-lg border transition-all text-left ${
+                      autoComplexModel === model.id
+                        ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
+                        : 'bg-card border-border hover:border-[#FF6B35]/30'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-1">
+                      <div className="text-foreground font-bold text-sm">{model.name}</div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-1 rounded uppercase tracking-wide ${
+                          model.tier === 'Premium'
+                            ? 'bg-purple-950/50 text-purple-300 border border-purple-500/20'
+                            : 'bg-green-950/50 text-green-300 border border-green-500/20'
+                        }`}>
+                          {model.tier}
+                        </span>
+                        {autoComplexModel === model.id && <Check className="w-4 h-4 text-[#FF6B35]" />}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">{model.description}</div>
+                    <div className="text-xs text-muted-foreground mt-1">{model.pricing}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-muted/30 border border-border rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Zap className="w-5 h-5 text-[#FF6B35] flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-foreground font-medium mb-1">Comment ça marche</p>
+                  <p className="text-xs text-muted-foreground">
+                    Chaque message est analysé en ~0ms (heuristique locale, sans appel API). Les requêtes courtes
+                    et lookups vont sur le modèle rapide. Les analyses, rédactions et requêtes complexes vont sur
+                    Kimi K2.5. Économies estimées: <strong className="text-foreground">-70% sur les coûts LLM</strong>.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Fixed model: Provider + Model Selection */}
+        {routingMode === 'fixed' && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-6"
+          >
+            {/* Provider Selection */}
+            <div>
+              <label className="text-sm text-muted-foreground uppercase tracking-wide mb-3 block">Provider</label>
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(PROVIDERS).map(([providerId, provider]) => {
+                  const hasKey = apiKeys.some((k: any) => k.provider === providerId);
+                  const isSelected = selectedProvider === providerId;
+
+                  if (!hasKey && providerId === 'ollama') {
+                    return (
+                      <Link
+                        key={providerId}
+                        href="/settings?tab=api-keys"
+                        className="p-4 rounded-lg border border-border bg-card text-left hover:border-[#FF6B35]/50 transition-all"
+                      >
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="text-2xl">{provider.icon}</div>
+                          <div className="text-sm font-bold text-foreground uppercase tracking-wide">{provider.name}</div>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-[#FF6B35]">
+                          <AlertCircle className="w-3 h-3" />
+                          <span>Configurer l'URL dans Settings →</span>
+                        </div>
+                      </Link>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={providerId}
+                      onClick={() => {
+                        setSelectedProvider(providerId);
+                        const defaultModel = provider.models[1] || provider.models[0];
+                        setSelectedModel(defaultModel.id);
+                      }}
+                      disabled={!hasKey}
+                      className={`p-4 rounded-lg border transition-all text-left ${
+                        isSelected
+                          ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
+                          : hasKey
+                          ? 'bg-card border-border hover:border-[#FF6B35]/30'
+                          : 'bg-card border-border opacity-50 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="text-2xl">{provider.icon}</div>
+                        <div className="text-sm font-bold text-foreground uppercase tracking-wide">{provider.name}</div>
+                      </div>
+                      {!hasKey && (
+                        <div className="flex items-center gap-2 text-xs text-yellow-400">
+                          <AlertCircle className="w-3 h-3" />
+                          <span>API Key Required</span>
+                        </div>
                       )}
-                      {selectedModelData.tier === 'Balanced' && (
-                        <>
-                          Best balance of performance and cost. Ideal for most tasks including product optimization and
-                          content creation.
-                        </>
+                      {hasKey && isSelected && (
+                        <div className="flex items-center gap-2 text-xs text-[#FF6B35]">
+                          <Check className="w-3 h-3" />
+                          <span>Selected</span>
+                        </div>
                       )}
-                      {selectedModelData.tier === 'Premium' && (
-                        <>
-                          Most capable model for complex reasoning and creative tasks. Best for strategic SEO content
-                          and advanced product analysis.
-                        </>
-                      )}
-                    </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {Object.values(PROVIDERS).every(
+                (_, i) => !apiKeys.some((k: any) => k.provider === Object.keys(PROVIDERS)[i])
+              ) && (
+                <div className="mt-4 bg-blue-950/20 border border-blue-500/20 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm text-blue-300 font-medium mb-1">No API Keys Configured</p>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        You need to add at least one API key to use AI models.
+                      </p>
+                      <Link
+                        href="/settings/models"
+                        className="inline-block px-4 py-2 rounded bg-[#FF6B35] text-white text-sm font-medium hover:bg-[#FF6B35]/90 transition-colors uppercase tracking-wide"
+                      >
+                        Add API Key
+                      </Link>
+                    </div>
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* Model Selection */}
+            {providerHasKey && (
+              <div>
+                <label className="text-sm text-muted-foreground uppercase tracking-wide mb-3 block">Model</label>
+                <div className="space-y-3">
+                  {selectedProviderData?.models.map((model) => {
+                    const isSelected = selectedModel === model.id;
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModel(model.id)}
+                        className={`w-full p-4 rounded-lg border transition-all text-left ${
+                          isSelected
+                            ? 'bg-[#FF6B35]/10 border-[#FF6B35]'
+                            : 'bg-card border-border hover:border-[#FF6B35]/30'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <div className="text-foreground font-bold mb-1">{model.name}</div>
+                            <div className="text-xs text-muted-foreground">{model.description}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-xs px-2 py-1 rounded uppercase tracking-wide ${
+                                model.tier === 'Premium'
+                                  ? 'bg-purple-950/50 text-purple-300 border border-purple-500/20'
+                                  : model.tier === 'Balanced'
+                                  ? 'bg-blue-950/50 text-blue-300 border border-blue-500/20'
+                                  : model.tier === 'Free'
+                                  ? 'bg-emerald-950/50 text-emerald-300 border border-emerald-500/20'
+                                  : 'bg-green-950/50 text-green-300 border border-green-500/20'
+                              }`}
+                            >
+                              {model.tier}
+                            </span>
+                            {isSelected && <Check className="w-5 h-5 text-[#FF6B35]" />}
+                          </div>
+                        </div>
+                        <div className="text-xs text-muted-foreground">{model.pricing}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedModelData && (
+                  <div className="mt-4 bg-muted/30 border border-border rounded-lg p-4">
+                    <div className="flex items-start gap-3">
+                      <Zap className="w-5 h-5 text-[#FF6B35] flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm text-foreground font-medium mb-1">Selected: {selectedModelData.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {selectedModelData.tier === 'Fast' && 'Most cost-effective option. Great for high-volume, straightforward tasks like inventory monitoring and customer data organization.'}
+                          {selectedModelData.tier === 'Balanced' && 'Best balance of performance and cost. Ideal for most tasks including product optimization and content creation.'}
+                          {selectedModelData.tier === 'Premium' && 'Most capable model for complex reasoning and creative tasks. Best for strategic SEO content and advanced product analysis.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>
@@ -408,7 +574,7 @@ export default function AgentSettingsPage() {
         <div className="flex items-center gap-4 pt-4">
           <Button
             onClick={handleSave}
-            disabled={!providerHasKey || saving}
+            disabled={saving || (routingMode === 'fixed' && !providerHasKey)}
             className="bg-[#FF6B35] hover:bg-[#FF6B35]/90 text-white"
           >
             {saving ? (

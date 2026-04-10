@@ -1,18 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
 import {
   LayoutDashboard,
   Activity,
-  FileText,
+  Inbox,
   Settings,
   Store,
   BookOpen,
   Users,
   Package,
+  LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { createClient } from '@/lib/supabase/client';
+import { useActiveStore } from '@/lib/hooks/useActiveStore';
+import { LIVRABLES_CHANGED_EVENT } from '@/lib/livrables';
 
 const navGroups = [
   {
@@ -22,7 +27,7 @@ const navGroups = [
       { name: 'Magasins', href: '/stores', icon: Store }, // i18n: Stores
       { name: 'Clients', href: '/customers', icon: Users }, // i18n: Customers
       { name: 'Inventaire', href: '/inventory', icon: Package }, // i18n: Inventory
-      { name: 'Contenu', href: '/content', icon: FileText }, // i18n: Content
+      { name: 'Livrables', href: '/livrables', icon: Inbox }, // i18n: Deliverables
     ],
   },
   {
@@ -42,6 +47,41 @@ const navGroups = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { activeStoreId } = useActiveStore();
+  const [unreadLivrables, setUnreadLivrables] = useState(0);
+
+  const fetchUnread = useCallback(async () => {
+    if (!activeStoreId) return;
+    try {
+      const res = await fetch(`/api/livrables?storeId=${activeStoreId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadLivrables(data.unreadCount ?? 0);
+      }
+    } catch {
+      // Non-blocking — badge just won't show
+    }
+  }, [activeStoreId]);
+
+  useEffect(() => {
+    fetchUnread();
+    // Re-fetch when any livrable is marked as read elsewhere
+    window.addEventListener(LIVRABLES_CHANGED_EVENT, fetchUnread);
+    // Poll every 30s to catch new livrables from agents
+    const interval = setInterval(fetchUnread, 30000);
+    return () => {
+      window.removeEventListener(LIVRABLES_CHANGED_EVENT, fetchUnread);
+      clearInterval(interval);
+    };
+  }, [fetchUnread]);
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+    router.refresh();
+  }
 
   return (
     <aside
@@ -93,7 +133,20 @@ export function Sidebar() {
                       )}
                       aria-hidden="true"
                     />
-                    {item.name}
+                    <span className="flex-1">{item.name}</span>
+                    {item.href === '/livrables' && unreadLivrables > 0 && (
+                      <span
+                        className={cn(
+                          'flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-mono font-medium',
+                          isActive
+                            ? 'bg-[var(--armada-bg)] text-[var(--armada-text)]'
+                            : 'text-white shadow-[0_0_8px_var(--armada-primary)]'
+                        )}
+                        style={isActive ? {} : { backgroundColor: 'var(--armada-primary)' }}
+                      >
+                        {unreadLivrables}
+                      </span>
+                    )}
                   </Link>
                 );
               })}
@@ -103,7 +156,14 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[var(--armada-accent)]/50 px-5 py-4">
+      <div className="border-t border-[var(--armada-accent)]/50 px-5 py-4 space-y-3">
+        <button
+          onClick={handleSignOut}
+          className="flex w-full items-center gap-2 text-xs font-mono text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]/70 transition-colors"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          Déconnexion
+        </button>
         <div className="flex items-center justify-between">
           <span className="font-serif text-sm text-[var(--armada-text)]/30 tracking-tight">
             armada

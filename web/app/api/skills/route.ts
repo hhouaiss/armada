@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 
 // GET - List all skills for the user
 export async function GET(request: NextRequest) {
   try {
-    // Get demo user (no auth for now)
-    const user = await prisma.user.findFirst();
+    const user = await getCurrentUser(request);
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -40,8 +40,7 @@ export async function GET(request: NextRequest) {
 // POST - Create a new skill
 export async function POST(request: NextRequest) {
   try {
-    // Get demo user (no auth for now)
-    const user = await prisma.user.findFirst();
+    const user = await getCurrentUser(request);
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });

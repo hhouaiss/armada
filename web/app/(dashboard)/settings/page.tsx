@@ -524,8 +524,19 @@ function IntegrationsTab() {
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, 'success' | 'error' | null>>({});
   const { activeStore } = useActiveStore();
+  const searchParams = useSearchParams();
 
   const { data, mutate } = useSWR('/api/integrations', (url) => fetch(url).then(r => r.json()));
+
+  const gscParam = searchParams?.get('gsc');
+  const gscError = searchParams?.get('reason');
+
+  useEffect(() => {
+    if (gscParam === 'connected') {
+      mutate();
+    }
+  }, [gscParam, mutate]);
+
   const integrations = data?.integrations || [];
 
   const getStatus = (platform: string): 'connected' | 'disconnected' => {
@@ -586,6 +597,20 @@ function IntegrationsTab() {
       )}
 
       {/* Google Search Console */}
+      {gscParam === 'error' && (
+        <div className="rounded-2xl border border-red-500/20 px-5 py-3 flex items-center gap-3 bg-red-500/5">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-500" />
+          <p className="text-xs font-mono text-red-400">
+            Google connection failed{gscError ? `: ${gscError}` : ''} — check the server logs and try again.
+          </p>
+        </div>
+      )}
+      {gscParam === 'denied' && (
+        <div className="rounded-2xl border border-yellow-500/20 px-5 py-3 flex items-center gap-3 bg-yellow-500/5">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 text-yellow-500" />
+          <p className="text-xs font-mono text-yellow-400">Google access was denied.</p>
+        </div>
+      )}
       <GoogleSearchConsoleCard isConnected={isGSCConnected} onDisconnect={() => handleDisconnect('google-search-console')} />
 
       {/* Other integrations */}

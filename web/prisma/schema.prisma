@@ -9,13 +9,15 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  passwordHash  String?
-  emailVerified DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  name                 String?
+  passwordHash         String?
+  emailVerified        DateTime?
+  supabase_auth_id     String?   @unique
+  onboarding_completed Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   stores        Store[]
   sessions      Session[]
@@ -45,6 +47,8 @@ model Store {
   chatMessages          ChatMessage[]
   conversationSessions  ConversationSession[]
   routingRules          RoutingRule[]
+  livrables             Livrable[]
+  agentMemory           AgentMemory[]
 
   @@index([userId])
   @@map("stores")
@@ -71,6 +75,11 @@ model Agent {
   modelProvider   String   @default("anthropic") // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together'
   modelName       String   @default("claude-sonnet-4-5-20250929") // Model ID for the provider
 
+  // ClawXRouter — complexity-based auto routing
+  routingMode      String  @default("fixed")                    // 'fixed' | 'auto'
+  autoSimpleModel  String  @default("google/gemma-4-31b-it")   // OpenRouter model for simple queries
+  autoComplexModel String  @default("moonshotai/kimi-k2.5")    // OpenRouter model for complex queries
+
   isActive        Boolean  @default(true)
   config          Json?
   createdAt       DateTime @default(now())
@@ -83,6 +92,7 @@ model Agent {
   conversationSessions    ConversationSession[]
   routingRules            RoutingRule[]
   skills                  AgentSkill[]
+  livrables               Livrable[]
 
   @@unique([storeId, type])
   @@index([storeId])
@@ -291,6 +301,44 @@ model Skill {
   @@index([type])
   @@index([category])
   @@map("skills")
+}
+
+// Livrables — structured deliverables produced by agents
+model Livrable {
+  id        String   @id @default(cuid())
+  slug      String   // Agent-generated slug e.g. "seo-avril-2026"
+  title     String
+  content   String   @db.Text // Full markdown content (agent response, marker stripped)
+  agentName String
+  agentType String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  agentId   String?
+  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@map("livrables")
+}
+
+// Agent Memory — 3-layer memory engine (index + topic files)
+model AgentMemory {
+  id        String   @id @default(cuid())
+  storeId   String
+  type      String   // 'index' | 'topic'
+  key       String   // 'index' for main index, or topic key e.g. 'ventes/strategy'
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, type, key])
+  @@index([storeId])
+  @@map("agent_memory")
 }
 
 // Many-to-many relation between Agents and Skills

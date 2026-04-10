@@ -1,10 +1,61 @@
-import { Bot, Context } from 'grammy';
+/**
+ * Telegram Integration — Sprint 5
+ *
+ * Features:
+ * - /link {storeId}    — Associate this chat with a store
+ * - /status            — Day summary via The Major
+ * - /dream             — Trigger AutoDream manually
+ * - /kairos on|off     — Toggle KAIROS proactive alerts
+ * - Natural text       — Routes to The Major for the linked store
+ * - KAIROS alerts      — Sent with inline confirm/dismiss buttons
+ */
+
+import { Bot, Context, InlineKeyboard } from 'grammy';
 import { Router } from '../core/router.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { SessionManager } from '../core/session-manager.js';
 import { getStoreCredentials, saveChatMessage, prisma } from '../lib/database.js';
 import { decryptToken } from '../lib/shopify-client.js';
 import { nanoid } from 'nanoid';
+import { runAutoDream } from '../workers/auto-dream.js';
+import { setKairosEnabled } from '../workers/kairos-worker.js';
+
+// ─── chatId ↔ storeId mapping helpers ────────────────────────────────────────
+// Stored in AgentMemory: type='meta', key='telegram_chat_{chatId}', content=storeId
+// Reverse:              type='meta', key='telegram_store_chat', content=chatId (per store)
+
+async function getStoreIdForChat(chatId: string): Promise<string | null> {
+  const record = await prisma.agentMemory
+    .findFirst({ where: { type: 'meta', key: `telegram_chat_${chatId}` } })
+    .catch(() => null);
+  return record?.content ?? null;
+}
+
+async function getChatIdForStore(storeId: string): Promise<string | null> {
+  const record = await prisma.agentMemory
+    .findUnique({ where: { storeId_type_key: { storeId, type: 'meta', key: 'telegram_store_chat' } } })
+    .catch(() => null);
+  return record?.content ?? null;
+}
+
+async function linkChatToStore(chatId: string, storeId: string): Promise<void> {
+  await Promise.all([
+    // chatId → storeId (global lookup — no storeId in WHERE, so upsert by findFirst + create)
+    prisma.agentMemory.upsert({
+      where: { storeId_type_key: { storeId, type: 'meta', key: `telegram_chat_${chatId}` } },
+      create: { storeId, type: 'meta', key: `telegram_chat_${chatId}`, content: storeId },
+      update: { content: storeId },
+    }),
+    // storeId → chatId (one Telegram chat per store)
+    prisma.agentMemory.upsert({
+      where: { storeId_type_key: { storeId, type: 'meta', key: 'telegram_store_chat' } },
+      create: { storeId, type: 'meta', key: 'telegram_store_chat', content: chatId },
+      update: { content: chatId },
+    }),
+  ]);
+}
+
+// ─── TelegramIntegration ──────────────────────────────────────────────────────
 
 export class TelegramIntegration {
   private bot: Bot;
@@ -26,69 +77,155 @@ export class TelegramIntegration {
     this.setupHandlers();
   }
 
+  // ─── Handlers ───────────────────────────────────────────────────────────────
+
   private setupHandlers() {
+    // ── /start ────────────────────────────────────────────────────────────────
     this.bot.command('start', async (ctx: Context) => {
-      await ctx.reply(
-        `🚀 *Welcome to StoreTeam!*\n\n` +
-        `I'm your AI-powered store assistant. I can help you:\n` +
-        `• Manage products\n` +
-        `• Track inventory\n` +
-        `• Handle customer data\n\n` +
-        `Just type a message to talk to your agents.\n` +
-        `Use /agents to see available agents.\n` +
-        `Use /help for more commands.`,
-        { parse_mode: 'Markdown' }
-      );
+      const chatId = String(ctx.chat?.id);
+      const linkedStoreId = await getStoreIdForChat(chatId);
+
+      if (linkedStoreId) {
+        const store = await prisma.store.findUnique({
+          where: { id: linkedStoreId },
+          select: { storeName: true },
+        }).catch(() => null);
+        await ctx.reply(
+          `Bonjour ! Vous êtes connecté à *${store?.storeName ?? linkedStoreId}*.\n\nTapez un message pour parler à votre équipe.`,
+          { parse_mode: 'Markdown' }
+        );
+      } else {
+        await ctx.reply(
+          `Bienvenue sur *Armada HQ* !\n\n` +
+          `Pour commencer, liez ce chat à votre boutique :\n` +
+          `\`/link VOTRE_STORE_ID\`\n\n` +
+          `Vous trouverez votre Store ID dans le tableau de bord.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
     });
 
-    this.bot.command('help', async (ctx: Context) => {
-      await ctx.reply(
-        `📚 *Commands:*\n\n` +
-        `/start - Get started\n` +
-        `/agents - List your agents\n` +
-        `/products - Ask about products\n` +
-        `/inventory - Check inventory\n` +
-        `/customers - Customer info\n` +
-        `/help - Show this help\n\n` +
-        `Or just chat naturally! I'll route your message to the right agent.`,
-        { parse_mode: 'Markdown' }
-      );
-    });
+    // ── /link {storeId} ───────────────────────────────────────────────────────
+    this.bot.command('link', async (ctx: Context) => {
+      const chatId = String(ctx.chat?.id);
+      const storeId = ctx.message?.text?.split(' ')[1]?.trim();
 
-    this.bot.command('agents', async (ctx: Context) => {
-      const agents = this.router.getAllAgents();
-      if (agents.length === 0) {
-        await ctx.reply('No agents loaded. Connect a store first in the StoreTeam dashboard.');
+      if (!storeId) {
+        await ctx.reply('Usage: `/link STORE_ID`', { parse_mode: 'Markdown' });
         return;
       }
-      const agentList = agents.map(a => `• *${a.name}* (${a.type})`).join('\n');
-      await ctx.reply(`🤖 *Active Agents:*\n\n${agentList}`, { parse_mode: 'Markdown' });
+
+      const store = await prisma.store.findUnique({
+        where: { id: storeId },
+        select: { id: true, storeName: true, isActive: true },
+      }).catch(() => null);
+
+      if (!store || !store.isActive) {
+        await ctx.reply(`Store introuvable ou inactif : \`${storeId}\``, { parse_mode: 'Markdown' });
+        return;
+      }
+
+      await linkChatToStore(chatId, storeId);
+      await ctx.reply(
+        `✅ Chat lié à *${store.storeName}*.\n\nKAIROS vous enverra des alertes ici. Tapez un message pour commencer.`,
+        { parse_mode: 'Markdown' }
+      );
     });
 
-    // Shortcut commands route with context hints
-    this.bot.command('products', async (ctx: Context) => {
-      const text = ctx.message?.text?.replace('/products', '').trim() || 'List my products';
-      await this.routeToAgent(ctx, text);
+    // ── /help ─────────────────────────────────────────────────────────────────
+    this.bot.command('help', async (ctx: Context) => {
+      await ctx.reply(
+        `*Commandes disponibles :*\n\n` +
+        `/link ID — Lier ce chat à une boutique\n` +
+        `/status — Résumé du jour\n` +
+        `/dream — Consolider la mémoire (AutoDream)\n` +
+        `/kairos on|off — Activer/désactiver les alertes proactives\n` +
+        `/help — Cette aide\n\n` +
+        `Ou tapez simplement votre message pour parler à votre équipe.`,
+        { parse_mode: 'Markdown' }
+      );
     });
 
-    this.bot.command('inventory', async (ctx: Context) => {
-      const text = ctx.message?.text?.replace('/inventory', '').trim() || 'Show low stock items';
-      await this.routeToAgent(ctx, text);
+    // ── /status ───────────────────────────────────────────────────────────────
+    this.bot.command('status', async (ctx: Context) => {
+      await this.routeToAgent(
+        ctx,
+        'Donne-moi un résumé rapide de la situation du jour : stock, commandes en attente, et points d\'attention.'
+      );
     });
 
-    this.bot.command('customers', async (ctx: Context) => {
-      const text = ctx.message?.text?.replace('/customers', '').trim() || 'List my customers';
-      await this.routeToAgent(ctx, text);
+    // ── /dream ────────────────────────────────────────────────────────────────
+    this.bot.command('dream', async (ctx: Context) => {
+      const chatId = String(ctx.chat?.id);
+      const storeId = await getStoreIdForChat(chatId);
+      if (!storeId) {
+        await ctx.reply('Aucune boutique liée. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+        return;
+      }
+
+      const store = await prisma.store.findUnique({
+        where: { id: storeId },
+        select: { userId: true },
+      }).catch(() => null);
+
+      if (!store) {
+        await ctx.reply('Boutique introuvable.');
+        return;
+      }
+
+      await ctx.reply('💤 AutoDream démarré en arrière-plan...');
+      runAutoDream(storeId, store.userId).catch((err) =>
+        console.error('AutoDream error (Telegram trigger):', err)
+      );
     });
 
-    // Handle all text messages - route to agents
+    // ── /kairos on|off ────────────────────────────────────────────────────────
+    this.bot.command('kairos', async (ctx: Context) => {
+      const chatId = String(ctx.chat?.id);
+      const storeId = await getStoreIdForChat(chatId);
+      if (!storeId) {
+        await ctx.reply('Aucune boutique liée. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+        return;
+      }
+
+      const arg = ctx.message?.text?.split(' ')[1]?.toLowerCase();
+      if (arg !== 'on' && arg !== 'off') {
+        await ctx.reply('Usage: `/kairos on` ou `/kairos off`', { parse_mode: 'Markdown' });
+        return;
+      }
+
+      await setKairosEnabled(storeId, arg === 'on');
+      await ctx.reply(
+        arg === 'on'
+          ? '✅ KAIROS activé — vous recevrez des alertes proactives toutes les 15 minutes.'
+          : '⏸ KAIROS désactivé — plus d\'alertes automatiques.'
+      );
+    });
+
+    // ── Callback queries (inline buttons) ────────────────────────────────────
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+
+      if (data === 'kairos:dismiss') {
+        await ctx.answerCallbackQuery({ text: 'Alerte ignorée.' });
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        return;
+      }
+
+      if (data === 'kairos:ack') {
+        await ctx.answerCallbackQuery({ text: 'Compris, je note.' });
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        return;
+      }
+
+      await ctx.answerCallbackQuery();
+    });
+
+    // ── Text messages ─────────────────────────────────────────────────────────
     this.bot.on('message:text', async (ctx: Context) => {
       const message = ctx.message?.text;
       if (!message) return;
-
-      console.log(`\n📱 Telegram message from ${ctx.from?.first_name}: ${message}`);
-
-      // Use smart routing (OpenClaw context-aware pattern)
+      console.log(`\n📱 Telegram [${ctx.from?.first_name}]: ${message}`);
       await this.routeToAgent(ctx, message);
     });
 
@@ -97,83 +234,113 @@ export class TelegramIntegration {
     });
   }
 
-  private async routeToAgent(ctx: Context, message: string) {
-    try {
-      // Find the first store with agents
-      const stores = await prisma.store.findMany({
-        where: { isActive: true },
-        include: { agents: { where: { isActive: true } } },
-        take: 1,
-      });
+  // ─── Route to agent ──────────────────────────────────────────────────────────
 
-      if (stores.length === 0) {
-        await ctx.reply('❌ No store connected. Please connect a store in the StoreTeam dashboard first.');
-        return;
+  private async routeToAgent(ctx: Context, message: string) {
+    const chatId = String(ctx.chat?.id);
+
+    try {
+      // Resolve store from linked chatId, fall back to first active store
+      let storeId = await getStoreIdForChat(chatId);
+
+      if (!storeId) {
+        const firstStore = await prisma.store.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+        });
+        if (!firstStore) {
+          await ctx.reply('Aucune boutique connectée. Configurez-en une dans le tableau de bord.');
+          return;
+        }
+        storeId = firstStore.id;
       }
 
-      const store = stores[0];
-
-      // Always route through The Major so the full conversation is remembered.
-      // The Major dispatches to specialists as needed while maintaining a single
-      // persistent session for this Telegram user.
-      const storeAgents = this.router.getAgentsByStore(store.id);
-      const agent = storeAgents.find(a => a.config.type === 'major')
-        ?? storeAgents[0]; // fallback to any available agent if Major not seeded yet
+      const storeAgents = this.router.getAgentsByStore(storeId);
+      const agent =
+        storeAgents.find((a) => a.config.type === 'major') ?? storeAgents[0];
 
       if (!agent) {
-        await ctx.reply('❌ No agents available for this store. Please check the dashboard.');
+        await ctx.reply('Aucun agent disponible pour cette boutique.');
         return;
       }
 
-      await ctx.reply('🤖 Processing...');
+      const thinkingMsg = await ctx.reply('_Traitement en cours..._', { parse_mode: 'Markdown' });
 
-      // Build tool context — include router so The Major can dispatch to specialists
+      const store = await getStoreCredentials(storeId);
       const accessToken = decryptToken(store.accessToken);
       const context = {
-        storeId: store.id,
+        storeId,
         shopifyAccessToken: accessToken,
         shopifyDomain: store.shopifyDomain,
         agentId: agent.config.id,
         operationId: nanoid(),
         channel: 'telegram' as const,
         router: this.router,
+        toolRegistry: this.toolRegistry,
+        sessionManager: this.sessionManager,
       };
 
-      // Save user message
       await saveChatMessage({
-        storeId: store.id,
+        storeId,
         agentId: agent.config.id,
         sender: 'user',
         content: message,
-        metadata: { channel: 'telegram', telegramUserId: ctx.from?.id },
+        metadata: { channel: 'telegram', chatId },
       });
 
-      // Unified conversationId shared with the web app — same memory across all channels
-      const conversationId = `user-${store.id}`;
+      // Shared conversationId with the web app — same memory across channels
+      const conversationId = `user-${storeId}`;
       const response = await agent.chat(message, context, conversationId);
 
-      // Save agent response
       await saveChatMessage({
-        storeId: store.id,
+        storeId,
         agentId: agent.config.id,
         sender: 'agent',
         content: response,
         metadata: { channel: 'telegram' },
       });
 
-      // Send response (split long messages)
+      // Delete "thinking" indicator
+      await ctx.api.deleteMessage(ctx.chat!.id, thinkingMsg.message_id).catch(() => {});
+
       const chunks = this.splitMessage(response, 4000);
       for (const chunk of chunks) {
-        await ctx.reply(chunk);
+        await ctx.reply(chunk, { parse_mode: 'Markdown' }).catch(async () => {
+          // If Markdown parse fails (special chars), send as plain text
+          await ctx.reply(chunk);
+        });
       }
     } catch (error) {
       console.error('Telegram routing error:', error);
-      const errMsg = error instanceof Error ? error.message : 'Unknown error';
-      await ctx.reply(`❌ Error: ${errMsg}`);
+      const errMsg = error instanceof Error ? error.message : 'Erreur inconnue';
+      await ctx.reply(`Erreur : ${errMsg}`);
     }
   }
 
-  // Removed inferAgentType() - now using SmartRouter for context-aware routing
+  // ─── KAIROS alert sending ────────────────────────────────────────────────────
+
+  /**
+   * Send a KAIROS alert to the store's linked Telegram chat.
+   * Shows inline buttons: "J'ai compris" / "Ignorer"
+   */
+  async sendAlert(storeId: string, text: string, hasActionButtons = false): Promise<void> {
+    const chatId = await getChatIdForStore(storeId);
+    if (!chatId) return; // Store not linked to any Telegram chat
+
+    const keyboard = new InlineKeyboard();
+    if (hasActionButtons) {
+      keyboard.text('J\'ai compris', 'kairos:ack').text('Ignorer', 'kairos:dismiss');
+    } else {
+      keyboard.text('Ignorer', 'kairos:dismiss');
+    }
+
+    await this.bot.api.sendMessage(Number(chatId), text, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  }
+
+  // ─── Utility ─────────────────────────────────────────────────────────────────
 
   private splitMessage(text: string, maxLength: number): string[] {
     if (text.length <= maxLength) return [text];
@@ -193,16 +360,19 @@ export class TelegramIntegration {
   }
 
   async start() {
-    console.log('📱 Starting Telegram bot...');
+    // Register bot commands — creates the "/" menu in the Telegram UI
+    await this.bot.api.setMyCommands([
+      { command: 'status',  description: 'Résumé du jour (stock, commandes, alertes)' },
+      { command: 'kairos',  description: 'Alertes proactives — /kairos on | off' },
+      { command: 'dream',   description: 'Consolider la mémoire (AutoDream)' },
+      { command: 'link',    description: 'Lier ce chat à une boutique — /link STORE_ID' },
+      { command: 'help',    description: 'Afficher l\'aide' },
+    ]);
+
     this.bot.start();
-    console.log('✓ Telegram bot started');
   }
 
   async stop() {
     await this.bot.stop();
-  }
-
-  async sendMessage(chatId: string, message: string) {
-    await this.bot.api.sendMessage(chatId, message);
   }
 }

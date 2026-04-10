@@ -45,7 +45,11 @@ import { getStoreInfoTool } from './tools/shopify/store.js';
 import { googleSearchConsoleTools } from './tools/google-search-console.js';
 import { callKlaviyoApiTool } from './tools/klaviyo.js';
 import { dispatchToSpecialistTool } from './tools/dispatch-agent.js';
+import { parallelDispatchTool } from './tools/parallel-dispatch.js';
 import { manageAgentsTool } from './tools/manage-agents.js';
+import { memoryReadTool, memoryWriteTool } from './tools/memory.js';
+import { checkDreamSchedule } from './workers/auto-dream.js';
+import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
 
 // Load environment variables
 config();
@@ -106,7 +110,12 @@ async function bootstrap() {
 
   // Register orchestration tools (used by The Major)
   toolRegistry.register(dispatchToSpecialistTool);
+  toolRegistry.register(parallelDispatchTool);
   toolRegistry.register(manageAgentsTool);
+
+  // Register memory tools (available to all agents)
+  toolRegistry.register(memoryReadTool);
+  toolRegistry.register(memoryWriteTool);
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 
@@ -166,21 +175,33 @@ async function bootstrap() {
       sessionManager
     );
     await telegram.start();
+    // Wire KAIROS → Telegram alerts
+    setTelegramNotifier((storeId, text, hasActionButtons) =>
+      telegram!.sendAlert(storeId, text, hasActionButtons)
+    );
     console.log('✓ Telegram bot connected\n');
   } else {
     console.log('⚠️  Telegram integration not configured (optional)\n');
   }
 
-  // Cleanup sessions periodically
+  // Cleanup sessions + AutoDream schedule check (every 5 minutes)
   setInterval(async () => {
     sessionManager.cleanup();
 
     // Cleanup old conversation sessions (OpenClaw pattern)
-    const deletedCount = await cleanupOldSessions(7); // Delete sessions older than 7 days
+    const deletedCount = await cleanupOldSessions(7);
     if (deletedCount > 0) {
       console.log(`🧹 Cleaned up ${deletedCount} old conversation sessions`);
     }
+
+    // AutoDream: nightly memory consolidation (runs at 03:00 UTC if cooldown elapsed)
+    await checkDreamSchedule(stores.map((s) => ({ id: s.id, userId: s.userId })));
   }, 300000); // Every 5 minutes
+
+  // KAIROS: proactive monitoring daemon (checks every 15 minutes per store)
+  setInterval(async () => {
+    await checkKairosSchedule(stores.map((s) => ({ id: s.id, userId: s.userId })));
+  }, 15 * 60 * 1000); // Every 15 minutes
 
   // Graceful shutdown
   process.on('SIGINT', async () => {

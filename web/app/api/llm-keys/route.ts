@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 import crypto from 'crypto';
 
 // Encryption utilities (mirrored from gateway)
@@ -35,17 +36,21 @@ function decrypt(encryptedText: string): string {
 // GET - List all configured API keys (masked)
 export async function GET(request: NextRequest) {
   try {
-    // Get demo user (no auth for now)
-    const user = await prisma.user.findFirst({
+    const user = await getCurrentUser(request);
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userWithKeys = await prisma.user.findUnique({
+      where: { id: user.id },
       include: { llmApiKeys: true },
     });
 
-    if (!user) {
+    if (!userWithKeys) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     // Return masked keys
-    const maskedKeys = user.llmApiKeys.map(key => ({
+    const maskedKeys = userWithKeys.llmApiKeys.map(key => ({
       provider: key.provider,
       isActive: key.isActive,
       maskedKey: maskApiKey(decrypt(key.apiKey)),
@@ -63,11 +68,9 @@ export async function GET(request: NextRequest) {
 // POST - Add or update API key
 export async function POST(request: NextRequest) {
   try {
-    // Get demo user (no auth for now)
-    const user = await prisma.user.findFirst();
-
+    const user = await getCurrentUser(request);
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { provider, apiKey } = await request.json();
@@ -120,11 +123,9 @@ export async function POST(request: NextRequest) {
 // DELETE - Remove API key
 export async function DELETE(request: NextRequest) {
   try {
-    // Get demo user (no auth for now)
-    const user = await prisma.user.findFirst();
-
+    const user = await getCurrentUser(request);
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { searchParams } = new URL(request.url);

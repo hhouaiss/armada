@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { encryptToken, decryptToken } from '@/lib/shopify';
+import { getCurrentUser } from '@/lib/auth';
 
-async function getDefaultUserId(): Promise<string | null> {
-  const user = await prisma.user.findFirst({ where: { email: 'demo@storeteam.ai' } });
-  return user?.id ?? null;
-}
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const userId = await getDefaultUserId();
+    const user = await getCurrentUser(request);
+    const userId = user?.id;
     if (!userId) {
       return NextResponse.json({ integrations: [] });
     }
@@ -38,6 +35,12 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    const userId = user?.id;
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { platform, credentials } = await request.json();
 
     if (!platform || !credentials) {
@@ -49,11 +52,6 @@ export async function POST(request: NextRequest) {
 
     // Encrypt credentials before storing
     const encryptedCredentials = encryptToken(JSON.stringify(credentials));
-
-    const userId = await getDefaultUserId();
-    if (!userId) {
-      return NextResponse.json({ error: 'User not found' }, { status: 500 });
-    }
 
     // Upsert integration
     const integration = await prisma.integration.upsert({
@@ -85,6 +83,12 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    const userId = user?.id;
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const platform = searchParams.get('platform');
 
@@ -95,12 +99,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const userId = await getDefaultUserId();
-    if (userId) {
-      await prisma.integration.deleteMany({
-        where: { userId, platform },
-      });
-    }
+    await prisma.integration.deleteMany({
+      where: { userId, platform },
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error) {

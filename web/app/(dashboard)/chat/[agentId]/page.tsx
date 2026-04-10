@@ -3,10 +3,72 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
-import { Send, Bot, Loader2, ArrowLeft } from 'lucide-react';
+import { Send, Bot, Loader2, ArrowLeft, FileText, ExternalLink, Sparkles } from 'lucide-react';
 import { useGateway } from '@/lib/hooks/useGateway';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import Link from 'next/link';
+import { AGENT_COLORS } from '@/lib/livrables';
+
+// ── Livrable link card ────────────────────────────────────────────────────────
+// Agents signal a livrable by including [LIVRABLE:id:title] anywhere in their message.
+// GATEWAY SYSTEM PROMPT NOTE: instruct agents to append this marker at the end of
+// long analyses, reports, or articles:
+//   [LIVRABLE:{livrable_id}:{livrable_title}]
+// Example: [LIVRABLE:seo-avril-2026:Analyse SEO — Avril 2026]
+
+interface LivrableRef {
+  id: string;
+  title: string;
+}
+
+function parseLivrableRef(content: string): LivrableRef | null {
+  const match = content.match(/\[LIVRABLE:([^:]+):([^\]]+)\]/);
+  if (!match) return null;
+  return { id: match[1], title: match[2] };
+}
+
+function stripLivrableMarker(content: string): string {
+  return content.replace(/\[LIVRABLE:[^\]]+\]/g, '').trim();
+}
+
+function LivrableCard({
+  livrableRef,
+  agentType,
+}: {
+  livrableRef: LivrableRef;
+  agentType: string;
+}) {
+  const colorClass = AGENT_COLORS[agentType] ?? AGENT_COLORS.major;
+  return (
+    <Link
+      href={`/livrables/${livrableRef.id}`}
+      className="flex items-center gap-3 mt-3 p-3.5 rounded-xl border border-[var(--armada-primary)]/25 hover:border-[var(--armada-primary)]/50 hover:bg-[var(--armada-primary)]/5 transition-all group"
+      style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 4%, var(--armada-surface))' }}
+    >
+      <div
+        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-[var(--armada-primary)]/20"
+        style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 10%, transparent)' }}
+      >
+        <FileText className="h-4 w-4" style={{ color: 'var(--armada-primary)' }} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <Sparkles className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--armada-primary)' }} />
+          <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--armada-primary)' }}>
+            Livrable généré {/* i18n: Deliverable generated */}
+          </span>
+        </div>
+        <p className="text-sm font-medium text-[var(--armada-text)] truncate leading-tight">
+          {livrableRef.title}
+        </p>
+        <p className="text-[10px] font-mono text-[var(--armada-text)]/40 mt-0.5">
+          Cliquez pour voir le rapport structuré {/* i18n: Click to view the structured report */}
+        </p>
+      </div>
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-[var(--armada-primary)]/50 group-hover:text-[var(--armada-primary)] transition-colors" />
+    </Link>
+  );
+}
 
 interface Message {
   id: string;
@@ -261,20 +323,33 @@ export default function ChatPage() {
               )}
 
               {/* Bubble */}
-              <div
-                className={`px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-                  message.sender === 'user'
-                    ? 'rounded-2xl rounded-br-sm text-white'
-                    : 'rounded-2xl rounded-bl-sm border border-[var(--armada-accent)]/50'
-                }`}
-                style={
-                  message.sender === 'user'
-                    ? { backgroundColor: 'var(--armada-primary)' }
-                    : { backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }
-                }
-              >
-                {message.content}
-              </div>
+              {(() => {
+                const livrableRef = message.sender === 'agent'
+                  ? parseLivrableRef(message.content)
+                  : null;
+                const displayContent = livrableRef
+                  ? stripLivrableMarker(message.content)
+                  : message.content;
+                return (
+                  <div
+                    className={`px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                      message.sender === 'user'
+                        ? 'rounded-2xl rounded-br-sm text-white'
+                        : 'rounded-2xl rounded-bl-sm border border-[var(--armada-accent)]/50'
+                    }`}
+                    style={
+                      message.sender === 'user'
+                        ? { backgroundColor: 'var(--armada-primary)' }
+                        : { backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }
+                    }
+                  >
+                    {displayContent}
+                    {livrableRef && (
+                      <LivrableCard livrableRef={livrableRef} agentType={agentType} />
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Timestamp + status */}
               <div className="flex items-center gap-2 px-1">

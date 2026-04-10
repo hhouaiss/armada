@@ -14,6 +14,8 @@ import { ToolRegistry } from './tool-registry.js';
 import { getStoreCredentials, saveOperation, updateOperation, saveChatMessage, prisma } from '../lib/database.js';
 import { decryptToken } from '../lib/shopify-client.js';
 import { registerStoreAgents } from '../lib/store-loader.js';
+import { runAutoDream } from '../workers/auto-dream.js';
+import { runKairosTick, setKairosEnabled, setKairosThresholds } from '../workers/kairos-worker.js';
 
 interface Connection {
   id: string;
@@ -414,6 +416,105 @@ export class Gateway {
         console.error('Error reloading store:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to reload store' }));
+      }
+      return;
+    }
+
+    // AutoDream manual trigger: POST /api/dream/:storeId
+    const dreamMatch = url.match(/^\/api\/dream\/([^/?]+)$/);
+    if (method === 'POST' && dreamMatch) {
+      const storeId = dreamMatch[1];
+      try {
+        const store = await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, userId: true },
+        });
+
+        if (!store) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Store not found' }));
+          return;
+        }
+
+        // Run async — respond immediately, dream runs in background
+        runAutoDream(store.id, store.userId).catch((err) =>
+          console.error(`AutoDream manual trigger error:`, err)
+        );
+
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, message: `AutoDream started for store ${storeId}` }));
+      } catch (error) {
+        console.error('Error triggering AutoDream:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to trigger AutoDream' }));
+      }
+      return;
+    }
+
+    // KAIROS manual trigger: POST /api/kairos/:storeId
+    const kairosTickMatch = url.match(/^\/api\/kairos\/([^/?]+)\/tick$/);
+    if (method === 'POST' && kairosTickMatch) {
+      const storeId = kairosTickMatch[1];
+      try {
+        const store = await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, userId: true },
+        });
+
+        if (!store) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Store not found' }));
+          return;
+        }
+
+        runKairosTick(store.id, store.userId).catch((err) =>
+          console.error(`KAIROS manual tick error:`, err)
+        );
+
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, message: `KAIROS tick started for store ${storeId}` }));
+      } catch (error) {
+        console.error('Error triggering KAIROS tick:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to trigger KAIROS tick' }));
+      }
+      return;
+    }
+
+    // KAIROS settings: POST /api/kairos/:storeId/settings
+    // Body: { enabled?: boolean, thresholds?: { lowStockUnits?, orderDelayHours?, openOrdersAlertCount? } }
+    const kairosSettingsMatch = url.match(/^\/api\/kairos\/([^/?]+)\/settings$/);
+    if (method === 'POST' && kairosSettingsMatch) {
+      const storeId = kairosSettingsMatch[1];
+      try {
+        const body = await this.readBody(req);
+        const { enabled, thresholds } = JSON.parse(body);
+
+        const store = await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { id: true },
+        });
+
+        if (!store) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Store not found' }));
+          return;
+        }
+
+        if (typeof enabled === 'boolean') {
+          await setKairosEnabled(storeId, enabled);
+        }
+
+        if (thresholds && typeof thresholds === 'object') {
+          await setKairosThresholds(storeId, thresholds);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, storeId }));
+      } catch (error) {
+        console.error('Error updating KAIROS settings:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to update KAIROS settings' }));
       }
       return;
     }

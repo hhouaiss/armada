@@ -997,8 +997,27 @@ function StepReady({
   onBack: () => void;
 }) {
   const router = useRouter();
+  const [launching, setLaunching] = useState(false);
   const selected = agents.filter(a => a.selected);
   const mission = FIRST_MISSIONS[form.type] || FIRST_MISSIONS.default;
+
+  async function handleLaunch() {
+    setLaunching(true);
+    try {
+      await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name,
+          businessType: form.type,
+          selectedAgents: selected.map(a => a.id),
+        }),
+      });
+    } catch (e) {
+      console.error('Onboarding save failed:', e);
+    }
+    router.push('/hq');
+  }
 
   return (
     <motion.div
@@ -1140,12 +1159,19 @@ function StepReady({
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5, duration: 0.4 }}
-          onClick={() => router.push('/hq')}
-          className="group flex w-full items-center justify-center gap-2 rounded-full py-4 text-sm font-medium transition-all hover:opacity-90 active:scale-[0.99]"
+          onClick={handleLaunch}
+          disabled={launching}
+          className="group flex w-full items-center justify-center gap-2 rounded-full py-4 text-sm font-medium transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-70"
           style={{ backgroundColor: 'var(--armada-primary)', color: '#fff' }}
         >
-          Entrer dans le QG
-          <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          {launching ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <>
+              Entrer dans le QG
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </>
+          )}
         </motion.button>
 
         <p

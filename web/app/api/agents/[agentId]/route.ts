@@ -35,12 +35,17 @@ export async function PATCH(
   try {
     const { agentId } = await params;
     const body = await request.json();
-    const { modelProvider, modelName } = body;
+    const { modelProvider, modelName, routingMode, autoSimpleModel, autoComplexModel } = body;
 
     // Validate provider and model
     const validProviders = ['anthropic', 'openai', 'openrouter', 'ollama'];
     if (modelProvider && !validProviders.includes(modelProvider)) {
       return NextResponse.json({ error: 'Invalid provider' }, { status: 400 });
+    }
+
+    const validRoutingModes = ['fixed', 'auto'];
+    if (routingMode && !validRoutingModes.includes(routingMode)) {
+      return NextResponse.json({ error: 'Invalid routing mode' }, { status: 400 });
     }
 
     // Update agent
@@ -49,6 +54,9 @@ export async function PATCH(
       data: {
         modelProvider: modelProvider || undefined,
         modelName: modelName || undefined,
+        ...(routingMode !== undefined && { routingMode }),
+        ...(autoSimpleModel !== undefined && { autoSimpleModel }),
+        ...(autoComplexModel !== undefined && { autoComplexModel }),
         updatedAt: new Date(),
       },
     });

@@ -1,32 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { createServerClient } from '@supabase/ssr';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/webmasters.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
 
+function createSignedState(userId: string): string {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const ts = Date.now().toString();
+  const payload = `${userId}|${nonce}|${ts}`;
+  const sig = crypto
+    .createHmac('sha256', process.env.ENCRYPTION_KEY!)
+    .update(payload)
+    .digest('hex');
+  return Buffer.from(`${payload}|${sig}`).toString('base64url');
+}
+
 export async function GET(request: NextRequest) {
   const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-
   if (!GOOGLE_CLIENT_ID) {
-    return NextResponse.json(
-      { error: 'GOOGLE_CLIENT_ID is not configured in .env.local' },
-      { status: 500 }
+    return NextResponse.json({ error: 'GOOGLE_CLIENT_ID not configured' }, { status: 500 });
+  }
+
+  // Require an authenticated Supabase session
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => request.cookies.getAll(),
+        setAll: () => {},
+      },
+    }
+  );
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.redirect(
+      new URL('/login?next=' + encodeURIComponent('/settings?tab=integrations'), request.url)
     );
   }
 
-  // Derive redirect URI from the actual incoming request — this is always correct
   const origin = new URL(request.url).origin;
   const REDIRECT_URI = `${origin}/api/auth/google/callback`;
-
-  console.log('[GSC OAuth] ─────────────────────────────────────');
-  console.log('[GSC OAuth] Initiating OAuth flow');
-  console.log('[GSC OAuth] redirect_uri:', REDIRECT_URI);
-  console.log('[GSC OAuth] ↑ This URL must be registered in Google Cloud Console');
-  console.log('[GSC OAuth] ─────────────────────────────────────');
-
-  const state = crypto.randomBytes(16).toString('hex');
+  const state = createSignedState(user.id);
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
@@ -34,17 +52,8 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', SCOPES);
   authUrl.searchParams.set('access_type', 'offline');
-  authUrl.searchParams.set('prompt', 'consent');
+  authUrl.searchParams.set('prompt', 'select_account consent');
   authUrl.searchParams.set('state', state);
 
-  const response = NextResponse.redirect(authUrl.toString());
-  response.cookies.set('google_oauth_state', state, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 600,
-    path: '/',
-  });
-
-  return response;
+  return NextResponse.redirect(authUrl.toString());
 }
