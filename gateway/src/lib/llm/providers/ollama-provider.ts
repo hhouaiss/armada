@@ -138,7 +138,7 @@ export class OllamaProvider implements LLMProvider {
     const choice = response.choices[0];
     const message = choice.message;
 
-    const toolCalls = message.tool_calls?.map((tc) => ({
+    const toolCalls = message.tool_calls?.map((tc: any) => ({
       id: tc.id,
       name: tc.function.name,
       input: (() => {

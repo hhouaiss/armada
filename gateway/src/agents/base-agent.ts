@@ -81,7 +81,7 @@ function compactToolResults(messages: Anthropic.MessageParam[]): Anthropic.Messa
   }).filter((m): m is Anthropic.MessageParam => m !== null);
 }
 
-export abstract class BaseAgent {
+export class BaseAgent {
   // Removed in-memory Map - now using database persistence (OpenClaw pattern)
 
   constructor(

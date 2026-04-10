@@ -155,7 +155,7 @@ export class OpenRouterProvider implements LLMProvider {
     const message = choice.message;
 
     // Extract tool calls
-    const toolCalls = message.tool_calls?.map((tc) => ({
+    const toolCalls = message.tool_calls?.map((tc: any) => ({
       id: tc.id,
       name: tc.function.name,
       input: (() => {

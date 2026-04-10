@@ -30,13 +30,14 @@ export interface ToolResult {
   success: boolean;
   data?: any;
   error?: string;
+  message?: string;
   requiresApproval?: boolean;
   approvalDescription?: string;
 }
 
 export interface ToolInputSchema {
   type: 'object';
-  properties: Record<string, { type: string; description: string; enum?: string[] }>;
+  properties: Record<string, { type: string; description: string; enum?: string[]; default?: any; properties?: Record<string, any> }>;
   required?: string[];
 }
 
