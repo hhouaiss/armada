@@ -51,3 +51,5 @@ gateway/prisma/migrations/
 .turbo/
 coverage/
 .nyc_output/
+.vercel
+.env*.local
