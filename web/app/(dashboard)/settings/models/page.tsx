@@ -341,7 +341,7 @@ export default function ModelsSettingsPage() {
 
                     <Button
                       onClick={() => saveKey(providerId, newKey)}
-                      disabled={!newKey || saving || (testResult && !testResult.valid)}
+                      disabled={!newKey || saving || (testResult != null && !testResult.valid)}
                       className="bg-[#FF6B35] hover:bg-[#FF6B35]/90 text-white"
                     >
                       {saving ? (
