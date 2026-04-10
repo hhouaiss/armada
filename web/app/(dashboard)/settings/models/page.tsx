@@ -108,7 +108,6 @@ export default function ModelsSettingsPage() {
       });
       if (res.ok) {
         setOllamaConfigured(true);
-        setOllamaEditing(false);
         setOllamaTestResult(null);
         await loadKeys();
       } else {
