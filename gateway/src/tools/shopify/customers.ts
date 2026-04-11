@@ -50,7 +50,7 @@ export const updateCustomerTagsTool: ShopifyTool = {
   name: 'customer_update_tags',
   description: 'Update customer tags for segmentation and organization. Use this to categorize customers (VIP, wholesale, etc.).',
   category: 'customers',
-  requiresApproval: false,  // Agents can autonomously manage tags
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {

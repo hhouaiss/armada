@@ -26,7 +26,7 @@ export const createBlogTool: ShopifyTool = {
   name: 'blog_create',
   description: 'Create a new blog in the store. Use this if no suitable blog exists for publishing articles.',
   category: 'content',
-  requiresApproval: false,
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {
@@ -89,7 +89,7 @@ export const createArticleTool: ShopifyTool = {
   name: 'article_create',
   description: 'Create and publish a blog article with SEO-optimized content. Use this to write and publish blog posts, product guides, tutorials, etc.',
   category: 'content',
-  requiresApproval: false,  // Agents can autonomously create content
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {
@@ -167,7 +167,7 @@ export const updateArticleTool: ShopifyTool = {
   name: 'article_update',
   description: 'Update an existing blog article. Use this to improve content, fix errors, or optimize SEO.',
   category: 'content',
-  requiresApproval: false,
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {

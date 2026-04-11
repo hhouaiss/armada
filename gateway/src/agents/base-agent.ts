@@ -142,6 +142,28 @@ export class BaseAgent {
   // Max messages to send to the LLM per call (sliding context window)
   private static readonly LLM_CONTEXT_WINDOW = 80;
 
+  // ── Pending approvals ────────────────────────────────────────────────────────
+  // Module-level map: conversationId → pending tool call awaiting user confirmation.
+  // TTL: 10 minutes. Only one pending action per conversation at a time.
+  private static readonly pendingApprovals = new Map<string, {
+    approvalKey: string;
+    toolName: string;
+    params: any;
+    expiresAt: number;
+  }>();
+
+  private static getApprovalKey(toolName: string, params: any): string {
+    // Stable key regardless of key ordering
+    const sorted = Object.fromEntries(Object.entries(params).sort());
+    return `${toolName}:${JSON.stringify(sorted)}`;
+  }
+
+  private static isConfirmation(message: string): boolean {
+    const lower = message.toLowerCase().trim();
+    if (lower.length > 80) return false; // Long messages are probably new requests, not confirmations
+    return /^(yes|oui|ok|go|sure|yep|yeah|proceed|confirm|approve|do it|vas-y|absolument|d'accord|c'est bon|parfait|execute|exécute|confirme|approuve)/.test(lower);
+  }
+
   async chat(
     message: string,
     context: ToolContext,
@@ -158,6 +180,24 @@ export class BaseAgent {
     const addToHistory = (msg: Anthropic.MessageParam) => {
       newMessages.push(msg);
     };
+
+    // ── Approval gate ─────────────────────────────────────────────────────────
+    // If the user's message is a confirmation, mark the pending action as approved
+    // so the LLM can call it in this turn without being blocked again.
+    const approvedKeysThisTurn = new Set<string>();
+    if (BaseAgent.isConfirmation(message)) {
+      const pending = BaseAgent.pendingApprovals.get(conversationId);
+      if (pending && pending.expiresAt > Date.now()) {
+        approvedKeysThisTurn.add(pending.approvalKey);
+        BaseAgent.pendingApprovals.delete(conversationId);
+        console.log(`  ✅ Approval received for: ${pending.toolName}`);
+      }
+    }
+    // Also purge expired entries on each chat() call (lightweight GC)
+    const now = Date.now();
+    for (const [key, val] of BaseAgent.pendingApprovals) {
+      if (val.expiresAt < now) BaseAgent.pendingApprovals.delete(key);
+    }
 
     // First user message
     addToHistory({ role: 'user', content: message });
@@ -207,14 +247,27 @@ export class BaseAgent {
           // Check if this tool requires approval
           const toolDef = this.toolRegistry.get(toolCall.name);
           if (toolDef?.requiresApproval) {
-            // Return approval request to user instead of executing
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: toolCall.id,
-              content: `APPROVAL REQUIRED: This action needs user confirmation before proceeding.\n\nAction: ${toolCall.name}\nDetails: ${JSON.stringify(toolCall.input, null, 2)}\n\nPlease inform the user that this action requires their approval. Describe what will happen and ask them to confirm.`,
-              is_error: false,
-            });
-            continue;
+            const approvalKey = BaseAgent.getApprovalKey(toolCall.name, toolCall.input as any);
+            if (!approvedKeysThisTurn.has(approvalKey)) {
+              // Block execution — store as pending, ask the user to confirm
+              BaseAgent.pendingApprovals.set(conversationId, {
+                approvalKey,
+                toolName: toolCall.name,
+                params: toolCall.input,
+                expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
+              });
+              console.log(`  🔐 Approval required for: ${toolCall.name}`);
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolCall.id,
+                content: `APPROVAL_REQUIRED\n\nTool: ${toolCall.name}\nDetails:\n${JSON.stringify(toolCall.input, null, 2)}\n\nDescribe exactly what you are about to do and ask the user for explicit confirmation before proceeding. Once they confirm, the action will execute automatically.`,
+                is_error: false,
+              });
+              continue;
+            }
+            // User already confirmed — remove from approved set and proceed
+            approvedKeysThisTurn.delete(approvalKey);
+            console.log(`  ✅ Executing approved action: ${toolCall.name}`);
           }
 
           const toolStartTime = Date.now();
@@ -431,16 +484,6 @@ export class BaseAgent {
         : tool.description,
       input_schema: tool.inputSchema as Anthropic.Tool['input_schema'],
     }));
-  }
-
-  private formatApprovalRequest(toolName: string, params: Record<string, any>): string {
-    const descriptions: Record<string, string> = {
-      product_create: `Create a new product: "${params.title || 'Untitled'}"`,
-      product_update: `Update product ${params.productId}`,
-      inventory_update: `Change inventory for item ${params.inventory_item_id} to ${params.available} units`,
-      customer_update_tags: `Update tags for customer ${params.customerId} to "${params.tags}"`,
-    };
-    return descriptions[toolName] || `Execute ${toolName} with params: ${JSON.stringify(params)}`;
   }
 
   /** Override in subclasses to inject additional context into the system prompt. */

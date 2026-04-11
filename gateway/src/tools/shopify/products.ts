@@ -50,7 +50,7 @@ export const createProductTool: ShopifyTool = {
   name: 'product_create',
   description: 'Create a new product in Shopify. Use this when the user asks to add a new product to their store.',
   category: 'products',
-  requiresApproval: false,  // Agents can autonomously create products
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {
@@ -89,7 +89,7 @@ export const updateProductTool: ShopifyTool = {
   name: 'product_update',
   description: 'Update an existing product in Shopify. Use this to modify product details, pricing, descriptions, etc.',
   category: 'products',
-  requiresApproval: false,  // Agents can autonomously update products
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {

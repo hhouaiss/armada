@@ -57,7 +57,7 @@ export const updateCollectionSEOTool: ShopifyTool = {
   name: 'collection_update_seo',
   description: 'Update collection SEO fields including title, description, meta title, and meta description. Use this to improve collection SEO and search rankings.',
   category: 'collections',
-  requiresApproval: false,  // Agents can autonomously optimize SEO
+  requiresApproval: true,
   inputSchema: {
     type: 'object',
     properties: {
