@@ -61,8 +61,8 @@ interface KairosDecision {
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
-const KAIROS_SYSTEM_PROMPT = `Tu es KAIROS, un daemon de surveillance proactif pour une boutique e-commerce Shopify.
-Tu analyses un snapshot des métriques en temps réel et décides si le propriétaire de la boutique doit être alerté.
+const KAIROS_SYSTEM_PROMPT = `Tu es KAIROS, un daemon de surveillance proactif pour un business.
+Tu analyses un snapshot des métriques en temps réel et décides si le propriétaire doit être alerté.
 
 RÈGLES ABSOLUES:
 - Tu ne JAMAIS exécutes d'actions. Tu OBSERVES et ALERTES uniquement.
@@ -112,7 +112,21 @@ async function buildStoreSnapshot(
   thresholds: KairosThresholds
 ): Promise<StoreSnapshot | null> {
   try {
-    const store = await getStoreCredentials(storeId);
+    // Non-Shopify businesses: getStoreCredentials may throw if no integration.
+    // In that case, return an empty snapshot so KAIROS still runs the LLM tick.
+    let store: Awaited<ReturnType<typeof getStoreCredentials>> | null = null;
+    try {
+      store = await getStoreCredentials(storeId);
+    } catch {
+      // No Shopify integration — return a minimal snapshot (no stock/order data)
+      return {
+        lowStockVariants: [],
+        delayedOrders: [],
+        totalUnfulfilledOrders: 0,
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+
     const accessToken = decryptToken(store.accessToken);
     const client = new ShopifyClient(store.shopifyDomain, accessToken);
 

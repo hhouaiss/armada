@@ -31,6 +31,30 @@ async function getStoreIdForChat(chatId: string): Promise<string | null> {
   return record?.content ?? null;
 }
 
+/**
+ * Resolve the store for a given chatId.
+ * If not linked yet, auto-links to the single active store (no manual /link needed).
+ * Returns null only if there are no active stores at all.
+ */
+async function resolveStore(chatId: string): Promise<{ id: string; storeName: string | null } | null> {
+  let storeId = await getStoreIdForChat(chatId);
+
+  if (!storeId) {
+    // Auto-link to the first active store — users should never need to type a store ID
+    const firstStore = await prisma.store
+      .findFirst({ where: { isActive: true }, select: { id: true, storeName: true } })
+      .catch(() => null);
+    if (!firstStore) return null;
+    await linkChatToStore(chatId, firstStore.id);
+    return firstStore;
+  }
+
+  const store = await prisma.store
+    .findUnique({ where: { id: storeId }, select: { id: true, storeName: true } })
+    .catch(() => null);
+  return store ?? null;
+}
+
 async function getChatIdForStore(storeId: string): Promise<string | null> {
   const record = await prisma.agentMemory
     .findUnique({ where: { storeId_type_key: { storeId, type: 'meta', key: 'telegram_store_chat' } } })
@@ -83,26 +107,21 @@ export class TelegramIntegration {
     // ── /start ────────────────────────────────────────────────────────────────
     this.bot.command('start', async (ctx: Context) => {
       const chatId = String(ctx.chat?.id);
-      const linkedStoreId = await getStoreIdForChat(chatId);
+      const store = await resolveStore(chatId);
 
-      if (linkedStoreId) {
-        const store = await prisma.store.findUnique({
-          where: { id: linkedStoreId },
-          select: { storeName: true },
-        }).catch(() => null);
-        await ctx.reply(
-          `Bonjour ! Vous êtes connecté à *${store?.storeName ?? linkedStoreId}*.\n\nTapez un message pour parler à votre équipe.`,
-          { parse_mode: 'Markdown' }
-        );
-      } else {
+      if (!store) {
         await ctx.reply(
           `Bienvenue sur *Armada HQ* !\n\n` +
-          `Pour commencer, liez ce chat à votre boutique :\n` +
-          `\`/link VOTRE_STORE_ID\`\n\n` +
-          `Vous trouverez votre Store ID dans le tableau de bord.`,
+          `Aucun workspace trouvé. Configurez-en un depuis le tableau de bord, puis revenez ici.`,
           { parse_mode: 'Markdown' }
         );
+        return;
       }
+
+      await ctx.reply(
+        `Bonjour ! Connecté à *${store.storeName ?? 'votre workspace'}*.\n\nTapez un message pour parler à votre équipe, ou utilisez /help pour voir les commandes.`,
+        { parse_mode: 'Markdown' }
+      );
     });
 
     // ── /link {storeId} ───────────────────────────────────────────────────────
@@ -136,7 +155,6 @@ export class TelegramIntegration {
     this.bot.command('help', async (ctx: Context) => {
       await ctx.reply(
         `*Commandes disponibles :*\n\n` +
-        `/link ID — Lier ce chat à un workspace\n` +
         `/status — Résumé du jour\n` +
         `/briefing — Briefing complet + priorités\n` +
         `/agents — Liste des agents actifs\n` +
@@ -169,13 +187,13 @@ export class TelegramIntegration {
     // ── /agents ───────────────────────────────────────────────────────────────
     this.bot.command('agents', async (ctx: Context) => {
       const chatId = String(ctx.chat?.id);
-      const storeId = await getStoreIdForChat(chatId);
-      if (!storeId) {
-        await ctx.reply('Aucun workspace lié. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+      const store = await resolveStore(chatId);
+      if (!store) {
+        await ctx.reply('Aucun workspace trouvé. Configurez-en un depuis le tableau de bord.');
         return;
       }
 
-      const storeAgents = this.router.getAgentsByStore(storeId);
+      const storeAgents = this.router.getAgentsByStore(store.id);
       if (storeAgents.length === 0) {
         await ctx.reply('Aucun agent actif pour ce workspace.');
         return;
@@ -196,24 +214,24 @@ export class TelegramIntegration {
     // ── /dream ────────────────────────────────────────────────────────────────
     this.bot.command('dream', async (ctx: Context) => {
       const chatId = String(ctx.chat?.id);
-      const storeId = await getStoreIdForChat(chatId);
-      if (!storeId) {
-        await ctx.reply('Aucune boutique liée. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+      const store = await resolveStore(chatId);
+      if (!store) {
+        await ctx.reply('Aucun workspace trouvé. Configurez-en un depuis le tableau de bord.');
         return;
       }
 
-      const store = await prisma.store.findUnique({
-        where: { id: storeId },
+      const storeData = await prisma.store.findUnique({
+        where: { id: store.id },
         select: { userId: true },
       }).catch(() => null);
 
-      if (!store) {
-        await ctx.reply('Boutique introuvable.');
+      if (!storeData) {
+        await ctx.reply('Workspace introuvable en base de données.');
         return;
       }
 
       await ctx.reply('💤 AutoDream démarré en arrière-plan...');
-      runAutoDream(storeId, store.userId).catch((err) =>
+      runAutoDream(store.id, storeData.userId).catch((err) =>
         console.error('AutoDream error (Telegram trigger):', err)
       );
     });
@@ -221,9 +239,9 @@ export class TelegramIntegration {
     // ── /kairos on|off ────────────────────────────────────────────────────────
     this.bot.command('kairos', async (ctx: Context) => {
       const chatId = String(ctx.chat?.id);
-      const storeId = await getStoreIdForChat(chatId);
-      if (!storeId) {
-        await ctx.reply('Aucune boutique liée. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+      const store = await resolveStore(chatId);
+      if (!store) {
+        await ctx.reply('Aucun workspace trouvé. Configurez-en un depuis le tableau de bord.');
         return;
       }
 
@@ -233,7 +251,7 @@ export class TelegramIntegration {
         return;
       }
 
-      await setKairosEnabled(storeId, arg === 'on');
+      await setKairosEnabled(store.id, arg === 'on');
       await ctx.reply(
         arg === 'on'
           ? '✅ KAIROS activé — vous recevrez des alertes proactives toutes les 15 minutes.'
@@ -468,7 +486,6 @@ export class TelegramIntegration {
       { command: 'agents',   description: 'Liste des agents actifs' },
       { command: 'kairos',   description: 'Alertes proactives — /kairos on | off' },
       { command: 'dream',    description: 'Consolider la mémoire (AutoDream)' },
-      { command: 'link',     description: 'Lier ce chat à un workspace — /link ID' },
       { command: 'help',     description: 'Afficher l\'aide' },
     ]);
 
