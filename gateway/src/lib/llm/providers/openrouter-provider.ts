@@ -151,6 +151,16 @@ export class OpenRouterProvider implements LLMProvider {
       throw err;
     }
 
+    if (!response.choices || response.choices.length === 0) {
+      // OpenRouter can return an empty choices array on content filters,
+      // upstream provider errors, or quota exhaustion.
+      const errorDetail = (response as any).error?.message || (response as any).error?.code || '';
+      throw new Error(
+        `Model "${this.modelName}" returned no response` +
+        (errorDetail ? `: ${errorDetail}` : ' (empty choices — possible content filter or upstream error).')
+      );
+    }
+
     const choice = response.choices[0];
     const message = choice.message;
 
