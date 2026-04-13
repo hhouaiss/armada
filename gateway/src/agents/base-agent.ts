@@ -116,7 +116,7 @@ export class BaseAgent {
         complexity === 'simple'
           ? (agent.autoSimpleModel || 'google/gemma-4-31b-it')
           : complexity === 'moyenne'
-          ? 'anthropic/claude-sonnet-4-6'
+          ? 'google/gemma-4-31b-it'
           : (agent.autoComplexModel || 'moonshotai/kimi-k2.5');
       console.log(`  🧭 ClawXRouter: ${complexity} → ${modelName}`);
     }
