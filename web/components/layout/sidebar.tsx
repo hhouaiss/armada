@@ -122,7 +122,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav items */}
-      <div className="flex-1 flex flex-col gap-5 px-2 py-5 overflow-y-auto">
+      <div className="flex-1 flex flex-col gap-5 px-2 py-5">
         {navGroups.map((group) => (
           <div key={group.label}>
             <div className="mb-1.5 flex justify-center">
@@ -202,17 +202,74 @@ export function Sidebar() {
             onClick={() => setMobileOpen(false)}
           />
           <aside
-            className="fixed left-0 top-0 h-full w-16 z-50 flex flex-col border-r border-[var(--armada-accent)]/50 md:hidden"
+            className="fixed left-0 top-0 h-full w-56 z-50 flex flex-col border-r border-[var(--armada-accent)]/50 md:hidden"
             style={{ backgroundColor: 'var(--armada-surface)' }}
           >
-            <button
-              onClick={() => setMobileOpen(false)}
-              className="absolute top-4 right-2 p-1.5 rounded-lg text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]"
-              aria-label="Fermer le menu"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-            {sidebarContent}
+            {/* Mobile header */}
+            <div className="flex h-16 items-center justify-between px-4 border-b border-[var(--armada-accent)]/50">
+              <Link href="/hq" className="font-serif text-lg font-semibold text-[var(--armada-text)]" onClick={() => setMobileOpen(false)}>
+                armada
+              </Link>
+              <button
+                onClick={() => setMobileOpen(false)}
+                className="p-1.5 rounded-lg text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]"
+                aria-label="Fermer le menu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Mobile nav */}
+            <nav className="flex flex-col flex-1 gap-5 px-3 py-5">
+              {navGroups.map((group) => (
+                <div key={group.label}>
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-[var(--armada-text)]/30 mb-2 px-2">
+                    {group.label}
+                  </p>
+                  <div className="flex flex-col gap-0.5">
+                    {group.items.map((item) => {
+                      const isActive =
+                        pathname === item.href ||
+                        (item.href !== '/hq' && pathname?.startsWith(item.href + '/'));
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={cn(
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors',
+                            isActive
+                              ? 'bg-[var(--armada-text)] text-[var(--armada-bg)]'
+                              : 'text-[var(--armada-text)]/60 hover:bg-[var(--armada-surface-hover)] hover:text-[var(--armada-text)]'
+                          )}
+                        >
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          <span className="text-sm font-mono">{item.name}</span>
+                          {item.href === '/livrables' && unreadLivrables > 0 && (
+                            <span
+                              className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[9px] font-mono font-bold text-white"
+                              style={{ backgroundColor: 'var(--armada-primary)' }}
+                            >
+                              {unreadLivrables > 9 ? '9+' : unreadLivrables}
+                            </span>
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </nav>
+
+            {/* Mobile footer */}
+            <div className="border-t border-[var(--armada-accent)]/50 px-3 py-4">
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]/70 hover:bg-[var(--armada-surface-hover)] transition-colors"
+              >
+                <LogOut className="h-4 w-4 shrink-0" />
+                <span className="text-sm font-mono">Déconnexion</span>
+              </button>
+            </div>
           </aside>
         </>
       )}

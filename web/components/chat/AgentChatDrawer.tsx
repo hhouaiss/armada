@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import useSWR from 'swr';
 import {
   X, Send, Bot, Loader2, FileText, ExternalLink, Sparkles,
-  ChevronDown, Plus, MessageSquare,
+  Plus, MessageSquare,
 } from 'lucide-react';
 import { useGateway } from '@/lib/hooks/useGateway';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
@@ -46,13 +46,6 @@ const agentPersonalities: Record<string, { name: string; role: string; greeting:
   major:     { name: 'Le Major',  role: 'Chef des Opérations',     greeting: "Bonjour ! Je suis Le Major, votre Chef des Opérations. Que puis-je faire pour vous ?" },
 };
 
-const LLM_OPTIONS = [
-  { label: 'Claude Haiku', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  { label: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
-  { label: 'Gemma 4 (rapide)', provider: 'openrouter', model: 'google/gemma-4-31b-it' },
-  { label: 'Kimi K2 (puissant)', provider: 'openrouter', model: 'moonshotai/kimi-k2' },
-];
-
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function LivrableCard({ livrableRef, agentType }: { livrableRef: LivrableRef; agentType: string }) {
@@ -92,8 +85,6 @@ export function AgentChatDrawer() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string>(() => `conv-${Date.now()}`);
-  const [selectedLLM, setSelectedLLM] = useState(LLM_OPTIONS[0]);
-  const [showLLMPicker, setShowLLMPicker] = useState(false);
   const [conversations, setConversations] = useState<Array<{ id: string; label: string }>>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -177,7 +168,7 @@ export function AgentChatDrawer() {
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(agentId, input, `user-${activeStoreId}`);
+      const response = await sendChatMessage(agentId, input, conversationId);
       setMessages(prev => [
         ...prev.map(m => m.id === userMsg.id ? { ...m, status: 'sent' as const } : m),
         { id: `agent-${Date.now()}`, sender: 'agent', content: response, timestamp: new Date(), status: 'sent' },
@@ -201,24 +192,16 @@ export function AgentChatDrawer() {
   if (!isOpen || !agentId) return null;
 
   return (
-    <>
-      {/* Backdrop (mobile only) */}
-      <div
-        className="fixed inset-0 bg-black/40 z-40 md:hidden"
-        onClick={closeChat}
-      />
-
-      {/* Drawer */}
-      <div
-        className={[
-          'fixed top-0 right-0 h-full z-50 flex flex-col',
-          'w-full md:w-[420px]',
-          'border-l border-[var(--armada-accent)]/50',
-          'shadow-2xl',
-          'transition-transform duration-300',
-        ].join(' ')}
-        style={{ backgroundColor: 'var(--armada-bg)' }}
-      >
+    /* Drawer — desktop only (mobile uses Telegram) */
+    <div
+      className={[
+        'hidden md:flex fixed top-0 right-0 h-full z-50 flex-col',
+        'w-[420px]',
+        'border-l border-[var(--armada-accent)]/50',
+        'shadow-2xl',
+      ].join(' ')}
+      style={{ backgroundColor: 'var(--armada-bg)' }}
+    >
         {/* ── Header ── */}
         <div
           className="flex items-center gap-3 px-4 py-3 border-b border-[var(--armada-accent)]/50 shrink-0"
@@ -239,42 +222,6 @@ export function AgentChatDrawer() {
             <p className="text-[9px] font-mono uppercase tracking-widest" style={{ color: 'var(--armada-primary)' }}>
               {personality.role}
             </p>
-          </div>
-
-          {/* LLM selector */}
-          <div className="relative">
-            <button
-              onClick={() => setShowLLMPicker(p => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--armada-accent)]/60 text-[10px] font-mono text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] hover:border-[var(--armada-primary)]/40 transition-colors"
-              style={{ backgroundColor: 'var(--armada-bg)' }}
-            >
-              {selectedLLM.label}
-              <ChevronDown className="h-2.5 w-2.5" />
-            </button>
-            {showLLMPicker && (
-              <div
-                className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-[var(--armada-accent)]/60 py-1 z-10 shadow-xl"
-                style={{ backgroundColor: 'var(--armada-surface)' }}
-              >
-                {LLM_OPTIONS.map(opt => (
-                  <button
-                    key={opt.model}
-                    onClick={() => { setSelectedLLM(opt); setShowLLMPicker(false); }}
-                    className={[
-                      'w-full text-left px-3 py-2 text-[11px] font-mono transition-colors',
-                      selectedLLM.model === opt.model
-                        ? 'text-[var(--armada-text)]'
-                        : 'text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] hover:bg-[var(--armada-surface-hover)]',
-                    ].join(' ')}
-                  >
-                    {opt.label}
-                    {selectedLLM.model === opt.model && (
-                      <span className="ml-2 text-[var(--armada-primary)]">✓</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* New conversation */}
@@ -415,7 +362,6 @@ export function AgentChatDrawer() {
             </button>
           </form>
         </div>
-      </div>
-    </>
+    </div>
   );
 }
