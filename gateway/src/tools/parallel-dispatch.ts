@@ -1,21 +1,12 @@
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 
-const SPECIALIST_TYPE_MAP: Record<string, string> = {
-  Sarah: 'product',
-  Marcus: 'inventory',
-  Emma: 'support',
-  Alex: 'content',
-  Olivia: 'seo',
-};
-
 /**
  * Parallel Dispatch Tool
  *
  * Runs multiple specialist agents simultaneously via Promise.all().
  * Use when a user question spans multiple domains (e.g. "sales + inventory?")
  * where sequential dispatch would waste time.
- *
- * Sprint 3 — Coordinator multi-agents
+ * The squad is dynamic — any active agent can be dispatched to by name.
  */
 export const parallelDispatchTool: AgentTool = {
   name: 'parallel_dispatch',
@@ -23,7 +14,8 @@ export const parallelDispatchTool: AgentTool = {
     'Dispatch tasks to multiple specialists SIMULTANEOUSLY and get all results at once. ' +
     'Use this when the user asks a question that spans multiple domains (e.g. "How are sales AND inventory doing?"). ' +
     'All specialists work in parallel — much faster than dispatching one by one. ' +
-    'Requires at least 2 dispatches. For a single specialist, use dispatch_to_specialist instead.',
+    'Requires at least 2 dispatches. For a single specialist, use dispatch_to_specialist instead. ' +
+    'Use any active agent name (e.g. "Zoe", "Marcus", "Olivia") — the squad is dynamic.',
   category: 'orchestration',
   inputSchema: {
     type: 'object',
@@ -36,8 +28,7 @@ export const parallelDispatchTool: AgentTool = {
           properties: {
             specialist: {
               type: 'string',
-              description: 'Specialist name: Sarah, Marcus, Emma, Alex, or Olivia',
-              enum: ['Sarah', 'Marcus', 'Emma', 'Alex', 'Olivia'],
+              description: 'The exact name of the specialist (case-insensitive). Use manage_agents list to see available agents.',
             },
             task: {
               type: 'string',
@@ -69,30 +60,34 @@ export const parallelDispatchTool: AgentTool = {
       };
     }
 
+    // Pre-resolve all agents before launching parallel tasks
+    const storeAgents = context.router.getAgentsByStore(context.storeId);
+    const resolved = dispatches.map(({ specialist, task }) => {
+      const agent = storeAgents.find(
+        a => a.config.name.toLowerCase() === specialist.toLowerCase() && a.config.type !== 'major'
+      );
+      return { specialist, task, agent };
+    });
+
+    const missing = resolved.filter(r => !r.agent).map(r => r.specialist);
+    if (missing.length > 0) {
+      const available = storeAgents.filter(a => a.config.type !== 'major').map(a => a.config.name).join(', ');
+      return {
+        success: false,
+        error: `Unknown specialist(s): ${missing.join(', ')}. Available: ${available || 'none'}. Use manage_agents list to see the full squad.`,
+      };
+    }
+
     console.log(`\n⚡ Parallel dispatch: ${dispatches.length} specialists running simultaneously...`);
     const startTime = Date.now();
 
     const results = await Promise.allSettled(
-      dispatches.map(async ({ specialist, task }, i) => {
-        const agentType = SPECIALIST_TYPE_MAP[specialist];
-        if (!agentType) throw new Error(`Unknown specialist "${specialist}"`);
-
-        const agent = context.router!
-          .getAgentsByStore(context.storeId)
-          .find((a) => a.config.type === agentType);
-
-        if (!agent) {
-          throw new Error(
-            `Specialist "${specialist}" is not configured for this store. Ask the user to set them up in My Team.`
-          );
-        }
-
-        // Isolated sub-conversation per dispatch so sessions don't collide
+      resolved.map(async ({ specialist, task, agent }, i) => {
         const subConversationId = `parallel-${context.operationId}-${specialist.toLowerCase()}-${i}`;
-        const subContext = { ...context, agentId: agent.config.id };
+        const subContext = { ...context, agentId: agent!.config.id };
 
         console.log(`  → [${specialist}] "${task.substring(0, 55)}..."`);
-        const response = await agent.chat(task, subContext, subConversationId);
+        const response = await agent!.chat(task, subContext, subConversationId);
         console.log(`  ✓ [${specialist}] done`);
 
         return { specialist, response };

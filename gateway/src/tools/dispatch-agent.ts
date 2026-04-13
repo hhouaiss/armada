@@ -1,28 +1,18 @@
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 
-const SPECIALIST_TYPE_MAP: Record<string, string> = {
-  Sarah: 'product',
-  Marcus: 'inventory',
-  Emma: 'support',
-  Alex: 'content',
-  Olivia: 'seo',
-};
-
 export const dispatchToSpecialistTool: AgentTool = {
   name: 'dispatch_to_specialist',
   description:
-    'Delegate a task to one of the specialist agents in the squad. ' +
-    'Use this to leverage each specialist\'s unique skills and tools. ' +
-    'Specialists: Sarah (products & catalog), Marcus (inventory & stock), ' +
-    'Emma (customer support & CRM), Alex (content & blog writing), Olivia (SEO & Google Search Console).',
+    'Delegate a task to any specialist agent in the squad by name. ' +
+    'The squad is dynamic — use manage_agents with action "list" to see who is available. ' +
+    'Provide the exact agent name (e.g. "Zoe", "Marcus", "Olivia") and a clear, self-contained task description.',
   category: 'orchestration',
   inputSchema: {
     type: 'object',
     properties: {
       specialist: {
         type: 'string',
-        description: 'Which specialist to delegate to: Sarah, Marcus, Emma, Alex, or Olivia',
-        enum: ['Sarah', 'Marcus', 'Emma', 'Alex', 'Olivia'],
+        description: 'The exact name of the specialist to delegate to (e.g. "Zoe", "Marcus", "Sarah"). Case-insensitive. Use manage_agents list to see the current squad.',
       },
       task: {
         type: 'string',
@@ -39,23 +29,24 @@ export const dispatchToSpecialistTool: AgentTool = {
       return { success: false, error: 'Router not available — cannot dispatch to specialist.' };
     }
 
-    const agentType = SPECIALIST_TYPE_MAP[specialist];
-    if (!agentType) {
-      return { success: false, error: `Unknown specialist "${specialist}". Valid options: Sarah, Marcus, Emma, Alex, Olivia.` };
-    }
-
-    const agent = context.router
-      .getAgentsByStore(context.storeId)
-      .find(a => a.config.type === agentType);
+    // Dynamic lookup by name (case-insensitive) from the live router
+    const storeAgents = context.router.getAgentsByStore(context.storeId);
+    const agent = storeAgents.find(
+      a => a.config.name.toLowerCase() === specialist.toLowerCase() && a.config.type !== 'major'
+    );
 
     if (!agent) {
+      const available = storeAgents
+        .filter(a => a.config.type !== 'major')
+        .map(a => a.config.name)
+        .join(', ');
       return {
         success: false,
-        error: `Specialist "${specialist}" is not configured for this store. Ask the user to set them up in My Team.`,
+        error: `Specialist "${specialist}" not found in this store's squad. Available: ${available || 'none'}. Use manage_agents with action "list" to see the full team.`,
       };
     }
 
-    console.log(`\n📡 Major dispatching to ${specialist} (${agentType}): "${task.substring(0, 60)}..."`);
+    console.log(`\n📡 Major dispatching to ${specialist} (${agent.config.type}): "${task.substring(0, 60)}..."`);
 
     const subConversationId = `major-dispatch-${context.operationId}-${specialist.toLowerCase()}`;
     const subContext = { ...context, agentId: agent.config.id };
