@@ -255,5 +255,8 @@ export class GatewayClient {
   }
 }
 
-// Singleton instance
-export const gatewayClient = new GatewayClient();
+// Singleton instance — reads Railway WebSocket URL from env in production
+const gatewayUrl =
+  process.env.NEXT_PUBLIC_GATEWAY_WS_URL || 'ws://localhost:18790';
+
+export const gatewayClient = new GatewayClient(gatewayUrl);
