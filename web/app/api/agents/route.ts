@@ -27,9 +27,12 @@ export async function GET(request: NextRequest) {
     });
 
     // Check gateway for live status
+    // GATEWAY_HTTP_URL: https://armada-production-221a.up.railway.app (prod)
+    //                   http://localhost:18790 (local dev — same port as WS now)
     let gatewayAgents: any[] = [];
+    const gatewayUrl = process.env.GATEWAY_HTTP_URL || 'http://localhost:18790';
     try {
-      const res = await fetch('http://localhost:18791/api/agents');
+      const res = await fetch(`${gatewayUrl}/api/agents`, { next: { revalidate: 0 } });
       const data = await res.json();
       gatewayAgents = data.agents || [];
     } catch (err) {

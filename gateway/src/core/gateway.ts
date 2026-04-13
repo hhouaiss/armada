@@ -41,17 +41,17 @@ export class Gateway {
     this.router = router;
     this.sessionManager = sessionManager;
     this.toolRegistry = toolRegistry;
-    this.wss = new WebSocketServer({ port });
+
+    // Single HTTP server handles both REST and WebSocket upgrades on the same port.
+    // This is required for Railway (only one port exposed per service).
+    this.httpServer = http.createServer(this.handleHttpRequest.bind(this));
+    this.wss = new WebSocketServer({ server: this.httpServer });
 
     this.wss.on('connection', this.handleConnection.bind(this));
 
-    console.log(`\n🚀 Gateway WebSocket server running on ws://localhost:${port}\n`);
-
-    // Start HTTP control server on port + 1
-    const httpPort = port + 1;
-    this.httpServer = http.createServer(this.handleHttpRequest.bind(this));
-    this.httpServer.listen(httpPort);
-    console.log(`🌐 Gateway HTTP control server running on http://localhost:${httpPort}\n`);
+    this.httpServer.listen(port, () => {
+      console.log(`\n🚀 Gateway running on port ${port} (HTTP + WebSocket)\n`);
+    });
   }
 
   private handleConnection(ws: WebSocket): void {
