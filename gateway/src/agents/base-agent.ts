@@ -709,7 +709,7 @@ ${customRules ? `\nADDITIONAL INSTRUCTIONS:\n${customRules}` : ''}`;
 
     let summaryProvider: LLMProvider;
     try {
-      summaryProvider = await createLLMProvider(store.userId, 'openrouter', 'google/gemma-4-31b-it');
+      summaryProvider = await createLLMProvider(store.userId, 'openrouter', 'google/gemma-4-26b-a4b-it');
     } catch {
       return '[Résumé non disponible]';
     }

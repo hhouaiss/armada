@@ -14,7 +14,7 @@ import { prisma, loadAllStoreSessionsForDream } from '../lib/database.js';
 import { MemoryEngine, MemoryIndex } from '../lib/memory-engine.js';
 import { decryptToken } from '../lib/shopify-client.js';
 
-const OPENROUTER_MODEL = 'google/gemma-4-27b-it';
+const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it';
 
 // Dream runs between 03:00 and 04:00 UTC
 const DREAM_HOUR_UTC = 3;

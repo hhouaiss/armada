@@ -15,7 +15,7 @@ import OpenAI from 'openai';
 import { prisma, getStoreCredentials } from '../lib/database.js';
 import { ShopifyClient, decryptToken } from '../lib/shopify-client.js';
 
-const OPENROUTER_MODEL = 'google/gemma-4-27b-it';
+const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
