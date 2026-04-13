@@ -334,10 +334,11 @@ export class ShopifyClient {
 
   // ── Orders ─────────────────────────────────────────────────────────────────
 
-  async getOrders(params?: { limit?: number; status?: string; financial_status?: string }) {
+  async getOrders(params?: { limit?: number; status?: string; financial_status?: string; fulfillment_status?: string }) {
     const queryParts: string[] = [];
     if (params?.status && params.status !== 'any') queryParts.push(`status:${params.status}`);
     if (params?.financial_status) queryParts.push(`financial_status:${params.financial_status}`);
+    if (params?.fulfillment_status) queryParts.push(`fulfillment_status:${params.fulfillment_status}`);
 
     const data = await this.query(
       `query GetOrders($first: Int!, $query: String) {
@@ -385,7 +386,7 @@ export class ShopifyClient {
     return flattenOrder(data.order);
   }
 
-  async listOrders(params?: { status?: string; limit?: number; since_id?: string }) {
+  async listOrders(params?: { status?: string; limit?: number; since_id?: string; fulfillment_status?: string }) {
     return this.getOrders(params);
   }
 
