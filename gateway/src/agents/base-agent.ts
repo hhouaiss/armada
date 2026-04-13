@@ -105,13 +105,19 @@ export class BaseAgent {
     let modelName = agent.modelName || 'claude-sonnet-4-5-20250929';
     const userId = agent.store.userId;
 
-    // ClawXRouter: complexity-based auto routing
+    // ClawXRouter: 3-tier complexity-based auto routing
+    // simple  → Gemma 4 (fast, cheap) — data lookups, direct questions
+    // moyenne → Claude Sonnet (balanced) — explanations, comparisons
+    // complexe → Kimi K2.5 (powerful) — strategy, writing, multi-domain
     if (agent.routingMode === 'auto' && message) {
       const complexity = classifyComplexity(message);
       modelProvider = 'openrouter';
-      modelName = complexity === 'simple'
-        ? (agent.autoSimpleModel || 'google/gemma-4-31b-it')
-        : (agent.autoComplexModel || 'moonshotai/kimi-k2.5');
+      modelName =
+        complexity === 'simple'
+          ? (agent.autoSimpleModel || 'google/gemma-4-31b-it')
+          : complexity === 'moyenne'
+          ? 'anthropic/claude-sonnet-4-6'
+          : (agent.autoComplexModel || 'moonshotai/kimi-k2.5');
       console.log(`  🧭 ClawXRouter: ${complexity} → ${modelName}`);
     }
 
@@ -202,10 +208,23 @@ export class BaseAgent {
     // First user message
     addToHistory({ role: 'user', content: message });
 
-    // Sliding context window for LLM: last N messages + compaction Level 2 (trim large tool results)
+    // Level 5: LLM summarization — runs once before the agentic loop when history
+    // exceeds the context window. The summary is cached in AgentMemory so future
+    // turns reuse it unless the covered range has grown significantly.
+    let contextSummaryMessages: Anthropic.MessageParam[] = [];
+    if (fullHistory.length > BaseAgent.LLM_CONTEXT_WINDOW) {
+      const cutoff = fullHistory.length - BaseAgent.LLM_CONTEXT_WINDOW;
+      contextSummaryMessages = await this.buildContextSummaryMessages(
+        fullHistory.slice(0, cutoff),
+        conversationId,
+        context,
+      );
+    }
+
+    // Sliding context window for LLM: [summary?] + last N messages + new messages
     const buildContextWindow = (): Anthropic.MessageParam[] => {
-      const base = fullHistory.slice(-BaseAgent.LLM_CONTEXT_WINDOW);
-      return compactToolResults([...base, ...newMessages]);
+      const recentBase = fullHistory.slice(-BaseAgent.LLM_CONTEXT_WINDOW);
+      return compactToolResults([...contextSummaryMessages, ...recentBase, ...newMessages]);
     };
 
     const session = this.sessionManager.create(this.config.id, 'chat');
@@ -617,6 +636,120 @@ CRITICAL RULES:
     Ce système permet à Armada HQ de créer automatiquement un livrable structuré, d'envoyer une notification à l'utilisateur, et de rendre le contenu accessible depuis l'espace Livrables avec un lien direct.
 
 ${customRules ? `\nADDITIONAL INSTRUCTIONS:\n${customRules}` : ''}`;
+  }
+
+  // ── Level 5 compaction helpers ────────────────────────────────────────────────
+
+  /**
+   * Returns a [user-summary, assistant-ack] message pair that replaces the oldest
+   * messages that no longer fit in the context window. Caches the result in
+   * AgentMemory so subsequent turns avoid regenerating until the covered range
+   * shifts by more than 20 messages.
+   */
+  private async buildContextSummaryMessages(
+    oldMessages: Anthropic.MessageParam[],
+    conversationId: string,
+    context: ToolContext,
+  ): Promise<Anthropic.MessageParam[]> {
+    const cutoff = oldMessages.length;
+    const summaryKey = `ctx_summary_${conversationId}`;
+
+    // Try cached summary first
+    let summaryText: string | null = null;
+    try {
+      const cached = await prisma.agentMemory.findFirst({
+        where: { storeId: context.storeId, type: 'summary', key: summaryKey },
+      });
+      if (cached) {
+        const data = JSON.parse(cached.content) as { summary: string; coveredUntilIndex: number };
+        if (data.coveredUntilIndex >= cutoff - 20) {
+          summaryText = data.summary;
+          console.log(`  📋 Level 5: reusing cached summary (covered ${data.coveredUntilIndex} msgs)`);
+        }
+      }
+    } catch { /* cache miss is not fatal */ }
+
+    // Generate fresh summary if needed
+    if (!summaryText) {
+      console.log(`  📋 Level 5: summarising ${oldMessages.length} old messages…`);
+      summaryText = await this.generateContextSummary(oldMessages, context);
+      try {
+        const payload = JSON.stringify({ summary: summaryText, coveredUntilIndex: cutoff });
+        await prisma.agentMemory.upsert({
+          where: { storeId_type_key: { storeId: context.storeId, type: 'summary', key: summaryKey } },
+          create: { storeId: context.storeId, type: 'summary', key: summaryKey, content: payload },
+          update: { content: payload },
+        });
+      } catch (err) {
+        console.warn('  ⚠️  Could not cache context summary:', err);
+      }
+    }
+
+    return [
+      {
+        role: 'user',
+        content: `[RÉSUMÉ — ${oldMessages.length} messages anciens condensés]\n\n${summaryText}`,
+      },
+      {
+        role: 'assistant',
+        content: 'Compris, je prends ce contexte en compte.',
+      },
+    ];
+  }
+
+  /** Calls a cheap LLM to produce a prose summary of the given messages. */
+  private async generateContextSummary(
+    oldMessages: Anthropic.MessageParam[],
+    context: ToolContext,
+  ): Promise<string> {
+    const store = await prisma.store
+      .findUnique({ where: { id: context.storeId }, select: { userId: true } })
+      .catch(() => null);
+    if (!store) return '[Résumé non disponible]';
+
+    let summaryProvider: LLMProvider;
+    try {
+      summaryProvider = await createLLMProvider(store.userId, 'openrouter', 'google/gemma-4-31b-it');
+    } catch {
+      return '[Résumé non disponible]';
+    }
+
+    const formatted = oldMessages
+      .map((m) => {
+        const role = m.role === 'user' ? 'Utilisateur' : 'Agent';
+        const content = Array.isArray(m.content)
+          ? (m.content as any[])
+              .map((b) => {
+                if (b.type === 'text') return b.text?.slice(0, 400);
+                if (b.type === 'tool_result') return `[Résultat: ${String(b.content).slice(0, 200)}]`;
+                if (b.type === 'tool_use') return `[Outil: ${b.name}]`;
+                return '';
+              })
+              .filter(Boolean)
+              .join(' ')
+          : String(m.content).slice(0, 400);
+        return `${role}: ${content}`;
+      })
+      .join('\n\n');
+
+    try {
+      const resp = await summaryProvider.chat({
+        messages: [
+          {
+            role: 'user',
+            content: `Résume cette conversation en 3-5 paragraphes (max 600 mots). Garde les décisions, préférences, contexte business/produit important. Ignore les erreurs temporaires et données opérationnelles.\n\n${formatted}`,
+          },
+        ],
+        systemPrompt:
+          'Tu es un expert en synthèse de conversations professionnelles. Produis un résumé factuel et structuré en français.',
+        tools: [],
+        maxTokens: 800,
+      });
+      return resp.content || '[Résumé vide]';
+    } catch (err) {
+      console.warn('  ⚠️  Summary generation failed:', err);
+      return '[Résumé non disponible — erreur de génération]';
+    }
   }
 
   getCapabilities(): string[] {
