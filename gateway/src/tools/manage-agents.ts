@@ -16,7 +16,7 @@ export const manageAgentsTool: AgentTool = {
   description:
     'Create, list, update, or deactivate agents in your squad. Use "create" to add a new specialist, "list" to see the current team, "update" to change an existing agent\'s capabilities or specialty, or "deactivate" to remove a member.',
   category: 'orchestration',
-  requiresApproval: true,
+  requiresApproval: false,
 
   inputSchema: {
     type: 'object',
