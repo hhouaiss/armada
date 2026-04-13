@@ -4,7 +4,8 @@ import { motion } from 'framer-motion';
 import useSWR from 'swr';
 import {
   MessageSquare, Activity, Bot, Settings, Shield, Loader2,
-  Zap, Clock, TrendingUp, Radio,
+  Zap, Clock, TrendingUp, Radio, Eye, Moon, ChevronRight,
+  Sparkles, AlertTriangle, CheckCircle2, CircleDot,
 } from 'lucide-react';
 import { useGateway } from '@/lib/hooks/useGateway';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
@@ -69,6 +70,12 @@ export default function CommandCenterPage() {
     activeStoreId ? `/api/agents?storeId=${activeStoreId}` : null,
     fetcher,
     { refreshInterval: 30000 }
+  );
+
+  const { data: workersData } = useSWR(
+    activeStoreId ? `/api/workers?storeId=${activeStoreId}` : null,
+    fetcher,
+    { refreshInterval: 60000 }
   );
 
   const { data: opsData } = useSWR(
@@ -440,7 +447,281 @@ export default function CommandCenterPage() {
             </div>
           </div>
         )}
+
+        {/* ── Workers / Daemons section ── */}
+        {workersData && (
+          <WorkersSection kairos={workersData.kairos} autoDream={workersData.autoDream} />
+        )}
       </div>
     </div>
+  );
+}
+
+// ── Workers helpers ────────────────────────────────────────────────────────────
+
+function nextKairosTick(lastTick: string | null): string {
+  if (!lastTick) return 'Prochaine occurrence';
+  const next = new Date(lastTick).getTime() + 15 * 60 * 1000;
+  const diff = next - Date.now();
+  if (diff <= 0) return 'Imminente';
+  const m = Math.ceil(diff / 60000);
+  return `dans ~${m} min`;
+}
+
+function nextDreamRun(): string {
+  const now = new Date();
+  const next = new Date(now);
+  next.setUTCHours(3, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+  const diff = next.getTime() - now.getTime();
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  if (h === 0) return `dans ${m} min`;
+  return `dans ${h}h${m > 0 ? ` ${m}min` : ''}`;
+}
+
+// ── Workers section component ──────────────────────────────────────────────────
+
+function WorkersSection({ kairos, autoDream }: {
+  kairos:    { enabled: boolean; lastTick: string | null };
+  autoDream: { lastRun: string | null; recentLogs: Array<{ date: string; decisionsCount: number; factsCount: number; hasContradictions: boolean; summary: string | null; ranAt: string }> };
+}) {
+  const lastLog = autoDream.recentLogs[0] ?? null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay: 0.15 }}
+      className="space-y-4"
+    >
+      {/* Section header */}
+      <div className="flex items-center gap-3 pt-1">
+        <span className="text-[9px] font-mono text-[var(--armada-text)]/30 uppercase tracking-[0.25em]">
+          Daemons système — 2 workers
+        </span>
+        <div className="flex-1 h-px bg-[var(--armada-accent)]/40" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        {/* ── KAIROS card ── */}
+        <div
+          className="relative rounded-2xl border overflow-hidden"
+          style={{
+            backgroundColor: 'var(--armada-surface)',
+            borderColor: kairos.enabled
+              ? 'rgba(59,130,246,0.25)'
+              : 'rgba(255,255,255,0.06)',
+          }}
+        >
+          {/* Top accent bar */}
+          <div
+            className="absolute top-0 left-0 right-0 h-px"
+            style={{ background: kairos.enabled ? 'linear-gradient(90deg, #3b82f6 0%, transparent 100%)' : 'transparent' }}
+          />
+
+          <div className="p-5 space-y-4">
+            {/* Header row */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex items-center justify-center h-9 w-9 rounded-xl flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.20)' }}
+                >
+                  <Eye className="h-4 w-4" style={{ color: '#3b82f6' }} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-serif text-sm text-[var(--armada-text)]">KAIROS</span>
+                    {kairos.enabled && (
+                      <span
+                        className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                        style={{ backgroundColor: 'rgba(34,197,94,0.12)', color: '#22c55e' }}
+                      >
+                        <span className="h-1 w-1 rounded-full bg-green-500 animate-pulse inline-block" />
+                        Actif
+                      </span>
+                    )}
+                    {!kairos.enabled && (
+                      <span
+                        className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                        style={{ backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)' }}
+                      >
+                        En pause
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mt-0.5">
+                    Surveillance proactive
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/settings"
+                className="flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border border-[var(--armada-accent)] text-[var(--armada-text)]/30 hover:text-[var(--armada-text)]/60 transition-colors"
+              >
+                <Settings className="h-3 w-3" />
+              </Link>
+            </div>
+
+            {/* Stats row */}
+            <div
+              className="grid grid-cols-2 gap-3 rounded-xl p-3"
+              style={{ backgroundColor: 'rgba(255,255,255,0.025)' }}
+            >
+              <div>
+                <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mb-1">
+                  Dernière vérification
+                </p>
+                <p className="text-xs font-mono text-[var(--armada-text)]/70">
+                  {kairos.lastTick ? formatTime(kairos.lastTick) : '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mb-1">
+                  Prochaine
+                </p>
+                <p className="text-xs font-mono" style={{ color: kairos.enabled ? '#3b82f6' : 'rgba(255,255,255,0.3)' }}>
+                  {kairos.enabled ? nextKairosTick(kairos.lastTick) : 'En pause'}
+                </p>
+              </div>
+            </div>
+
+            {/* Description */}
+            <p className="text-[11px] text-[var(--armada-text)]/40 leading-relaxed">
+              Analyse les stocks et commandes toutes les 15 minutes. Alerte uniquement si quelque chose nécessite votre attention.
+            </p>
+          </div>
+        </div>
+
+        {/* ── AutoDream card ── */}
+        <div
+          className="relative rounded-2xl border overflow-hidden"
+          style={{
+            backgroundColor: 'var(--armada-surface)',
+            borderColor: 'rgba(168,85,247,0.25)',
+          }}
+        >
+          {/* Top accent bar */}
+          <div
+            className="absolute top-0 left-0 right-0 h-px"
+            style={{ background: 'linear-gradient(90deg, #a855f7 0%, transparent 100%)' }}
+          />
+
+          <div className="p-5 space-y-4">
+            {/* Header row */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex items-center justify-center h-9 w-9 rounded-xl flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(168,85,247,0.10)', border: '1px solid rgba(168,85,247,0.20)' }}
+                >
+                  <Moon className="h-4 w-4" style={{ color: '#a855f7' }} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-serif text-sm text-[var(--armada-text)]">AutoDream</span>
+                    <span
+                      className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                      style={{ backgroundColor: 'rgba(168,85,247,0.12)', color: '#a855f7' }}
+                    >
+                      <Sparkles className="h-2 w-2" />
+                      Auto
+                    </span>
+                  </div>
+                  <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mt-0.5">
+                    Consolidation mémoire — 03:00 UTC
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats row */}
+            <div
+              className="grid grid-cols-2 gap-3 rounded-xl p-3"
+              style={{ backgroundColor: 'rgba(255,255,255,0.025)' }}
+            >
+              <div>
+                <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mb-1">
+                  Dernier cycle
+                </p>
+                <p className="text-xs font-mono text-[var(--armada-text)]/70">
+                  {autoDream.lastRun ? formatTime(autoDream.lastRun) : 'Jamais exécuté'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mb-1">
+                  Prochain cycle
+                </p>
+                <p className="text-xs font-mono" style={{ color: '#a855f7' }}>
+                  {nextDreamRun()}
+                </p>
+              </div>
+            </div>
+
+            {/* Last dream log summary */}
+            {lastLog ? (
+              <div
+                className="rounded-xl p-3 space-y-2"
+                style={{ backgroundColor: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.12)' }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest">
+                    Dernier rapport — {lastLog.date}
+                  </span>
+                  {lastLog.hasContradictions && (
+                    <div className="flex items-center gap-1">
+                      <AlertTriangle className="h-2.5 w-2.5 text-amber-400" />
+                      <span className="text-[9px] font-mono text-amber-400">Contradictions</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Counters */}
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle2 className="h-3 w-3" style={{ color: '#a855f7' }} />
+                    <span className="text-xs font-mono text-[var(--armada-text)]/60">
+                      {lastLog.decisionsCount} décision{lastLog.decisionsCount !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <CircleDot className="h-3 w-3" style={{ color: '#a855f7' }} />
+                    <span className="text-xs font-mono text-[var(--armada-text)]/60">
+                      {lastLog.factsCount} fait{lastLog.factsCount !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Summary text */}
+                {lastLog.summary && (
+                  <p className="text-[11px] text-[var(--armada-text)]/50 leading-relaxed line-clamp-2">
+                    {lastLog.summary}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[var(--armada-text)]/35 leading-relaxed">
+                Analyse les conversations des 7 derniers jours chaque nuit et consolide les décisions et faits clés en mémoire.
+              </p>
+            )}
+
+            {/* Dream log history link */}
+            {autoDream.recentLogs.length > 1 && (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[9px] font-mono text-[var(--armada-text)]/25">
+                  {autoDream.recentLogs.length} cycles enregistrés
+                </span>
+                <button className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider transition-colors hover:opacity-80" style={{ color: '#a855f7' }}>
+                  Voir l'historique <ChevronRight className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>
+    </motion.div>
   );
 }
