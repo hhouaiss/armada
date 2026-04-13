@@ -136,8 +136,10 @@ export class TelegramIntegration {
     this.bot.command('help', async (ctx: Context) => {
       await ctx.reply(
         `*Commandes disponibles :*\n\n` +
-        `/link ID — Lier ce chat à une boutique\n` +
+        `/link ID — Lier ce chat à un workspace\n` +
         `/status — Résumé du jour\n` +
+        `/briefing — Briefing complet + priorités\n` +
+        `/agents — Liste des agents actifs\n` +
         `/dream — Consolider la mémoire (AutoDream)\n` +
         `/kairos on|off — Activer/désactiver les alertes proactives\n` +
         `/help — Cette aide\n\n` +
@@ -150,7 +152,44 @@ export class TelegramIntegration {
     this.bot.command('status', async (ctx: Context) => {
       await this.routeToAgent(
         ctx,
-        'Donne-moi un résumé rapide de la situation du jour : stock, commandes en attente, et points d\'attention.'
+        'Donne-moi un résumé rapide de la situation du jour : activité des agents, tâches en cours, et points d\'attention.'
+      );
+    });
+
+    // ── /briefing ─────────────────────────────────────────────────────────────
+    this.bot.command('briefing', async (ctx: Context) => {
+      await this.routeToAgent(
+        ctx,
+        'Génère un briefing complet pour aujourd\'hui : bilan de la nuit (AutoDream), ' +
+        'actions prioritaires du jour, points d\'attention importants. ' +
+        'Sois proactif et propose des actions concrètes.'
+      );
+    });
+
+    // ── /agents ───────────────────────────────────────────────────────────────
+    this.bot.command('agents', async (ctx: Context) => {
+      const chatId = String(ctx.chat?.id);
+      const storeId = await getStoreIdForChat(chatId);
+      if (!storeId) {
+        await ctx.reply('Aucun workspace lié. Utilisez `/link STORE_ID` d\'abord.', { parse_mode: 'Markdown' });
+        return;
+      }
+
+      const storeAgents = this.router.getAgentsByStore(storeId);
+      if (storeAgents.length === 0) {
+        await ctx.reply('Aucun agent actif pour ce workspace.');
+        return;
+      }
+
+      const lines = storeAgents.map(a => {
+        const status = a.config.type === 'major' ? '⭐' : '🤖';
+        return `${status} *${a.config.name}* — ${a.config.type}`;
+      });
+
+      await ctx.reply(
+        `*Votre équipe (${storeAgents.length} agents) :*\n\n${lines.join('\n')}\n\n` +
+        `Tapez un message pour interagir avec Le Major.`,
+        { parse_mode: 'Markdown' }
       );
     });
 
@@ -215,6 +254,17 @@ export class TelegramIntegration {
       if (data === 'kairos:ack') {
         await ctx.answerCallbackQuery({ text: 'Compris, je note.' });
         await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        return;
+      }
+
+      if (data === 'kairos:analyse') {
+        await ctx.answerCallbackQuery({ text: 'Le Major analyse...' });
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        // Trigger an analysis via the Major agent
+        await this.routeToAgent(
+          ctx,
+          'KAIROS vient de détecter une alerte. Analyse la situation et propose des actions concrètes immédiates.'
+        );
         return;
       }
 
@@ -329,7 +379,11 @@ export class TelegramIntegration {
 
     const keyboard = new InlineKeyboard();
     if (hasActionButtons) {
-      keyboard.text('J\'ai compris', 'kairos:ack').text('Ignorer', 'kairos:dismiss');
+      keyboard
+        .text('Demander analyse', 'kairos:analyse')
+        .text('J\'ai compris', 'kairos:ack')
+        .row()
+        .text('Ignorer', 'kairos:dismiss');
     } else {
       keyboard.text('Ignorer', 'kairos:dismiss');
     }
@@ -338,6 +392,53 @@ export class TelegramIntegration {
       parse_mode: 'Markdown',
       reply_markup: keyboard,
     });
+  }
+
+  /**
+   * Send a proactive morning briefing to the store's linked Telegram chat.
+   * Called daily at ~09:00 local time from the gateway scheduler.
+   */
+  async sendMorningBriefing(storeId: string): Promise<void> {
+    const chatId = await getChatIdForStore(storeId);
+    if (!chatId) return;
+
+    const storeAgents = this.router.getAgentsByStore(storeId);
+    const agent = storeAgents.find(a => a.config.type === 'major') ?? storeAgents[0];
+    if (!agent) return;
+
+    console.log(`☀️  Sending morning briefing for store ${storeId}`);
+
+    try {
+      const store = await getStoreCredentials(storeId);
+      const accessToken = decryptToken(store.accessToken);
+      const context = {
+        storeId,
+        shopifyAccessToken: accessToken,
+        shopifyDomain: store.shopifyDomain,
+        agentId: agent.config.id,
+        operationId: nanoid(),
+        channel: 'telegram' as const,
+        router: this.router,
+        toolRegistry: this.toolRegistry,
+        sessionManager: this.sessionManager,
+      };
+
+      const briefingPrompt =
+        'C\'est le matin. Génère un briefing de démarrage de journée : ' +
+        'bilan de la nuit, métriques clés, 3 priorités du jour, ' +
+        'et une recommandation proactive. Sois concis et actionnable.';
+
+      const response = await agent.chat(briefingPrompt, context, `briefing-${storeId}`);
+
+      const chunks = this.splitMessage(`☀️ *Briefing du matin*\n\n${response}`, 4000);
+      for (const chunk of chunks) {
+        await this.bot.api.sendMessage(Number(chatId), chunk, { parse_mode: 'Markdown' }).catch(async () => {
+          await this.bot.api.sendMessage(Number(chatId), chunk);
+        });
+      }
+    } catch (err) {
+      console.error('Morning briefing error:', err);
+    }
   }
 
   // ─── Utility ─────────────────────────────────────────────────────────────────
@@ -362,11 +463,13 @@ export class TelegramIntegration {
   async start() {
     // Register bot commands — creates the "/" menu in the Telegram UI
     await this.bot.api.setMyCommands([
-      { command: 'status',  description: 'Résumé du jour (stock, commandes, alertes)' },
-      { command: 'kairos',  description: 'Alertes proactives — /kairos on | off' },
-      { command: 'dream',   description: 'Consolider la mémoire (AutoDream)' },
-      { command: 'link',    description: 'Lier ce chat à une boutique — /link STORE_ID' },
-      { command: 'help',    description: 'Afficher l\'aide' },
+      { command: 'status',   description: 'Résumé rapide du jour' },
+      { command: 'briefing', description: 'Briefing complet + priorités du jour' },
+      { command: 'agents',   description: 'Liste des agents actifs' },
+      { command: 'kairos',   description: 'Alertes proactives — /kairos on | off' },
+      { command: 'dream',    description: 'Consolider la mémoire (AutoDream)' },
+      { command: 'link',     description: 'Lier ce chat à un workspace — /link ID' },
+      { command: 'help',     description: 'Afficher l\'aide' },
     ]);
 
     this.bot.start();

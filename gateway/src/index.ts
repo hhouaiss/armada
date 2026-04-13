@@ -6,7 +6,7 @@ import { ToolRegistry } from './core/tool-registry.js';
 import { TelegramIntegration } from './integrations/telegram.js';
 import { startGeminiLiveBridge } from './core/gemini-live-bridge.js';
 import { registerStoreAgents } from './lib/store-loader.js';
-import { prisma, cleanupOldSessions } from './lib/database.js';
+import { prisma, cleanupOldSessions, testConnection } from './lib/database.js';
 
 // Import tools
 import {
@@ -57,7 +57,11 @@ config();
 const PORT = parseInt(process.env.PORT || '18790');
 
 async function bootstrap() {
-  console.log('🚀 Starting Store Team Gateway...\n');
+  console.log('🚀 Starting Armada Gateway...\n');
+
+  // Verify database connectivity before doing anything else (Railway cold-start safe)
+  console.log('🗄️  Testing database connection…');
+  await testConnection(5);
 
   // Initialize core systems
   const toolRegistry = new ToolRegistry();
@@ -202,6 +206,26 @@ async function bootstrap() {
   setInterval(async () => {
     await checkKairosSchedule(stores.map((s) => ({ id: s.id, userId: s.userId })));
   }, 15 * 60 * 1000); // Every 15 minutes
+
+  // Morning briefing: send at ~09:00 local time (check every 30 minutes)
+  if (telegram) {
+    let lastBriefingDate = '';
+    setInterval(async () => {
+      const now = new Date();
+      const hour = now.getHours();
+      const dateKey = now.toISOString().slice(0, 10);
+      // Fire between 09:00 and 09:30, once per day
+      if (hour === 9 && dateKey !== lastBriefingDate) {
+        lastBriefingDate = dateKey;
+        console.log(`☀️  Morning briefing time — sending to ${stores.length} store(s)`);
+        for (const store of stores) {
+          await telegram!.sendMorningBriefing(store.id).catch((err: any) =>
+            console.error(`Morning briefing error for store ${store.id}:`, err)
+          );
+        }
+      }
+    }, 30 * 60 * 1000); // Every 30 minutes
+  }
 
   // Graceful shutdown
   process.on('SIGINT', async () => {

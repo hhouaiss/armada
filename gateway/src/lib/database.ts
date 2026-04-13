@@ -6,11 +6,63 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
+  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
+}
+
+/**
+ * Test database connectivity with exponential backoff retry.
+ * Railway sometimes takes a few seconds to accept the first connection.
+ */
+export async function testConnection(maxRetries = 5): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      console.log(`✓ Database connected (attempt ${attempt})`);
+      return;
+    } catch (err) {
+      lastError = err;
+      const delayMs = Math.min(1000 * 2 ** (attempt - 1), 10000); // 1s, 2s, 4s, 8s, 10s
+      console.warn(
+        `⚠️  DB connection attempt ${attempt}/${maxRetries} failed. Retrying in ${delayMs / 1000}s…`,
+        err instanceof Error ? err.message : err
+      );
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw new Error(`Database connection failed after ${maxRetries} attempts: ${lastError}`);
+}
+
+/**
+ * Wrap any DB call with retry logic for transient Railway connection errors.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const isTransient =
+        err?.code === 'P1001' || // Can't reach database
+        err?.code === 'P1002' || // Timeout
+        err?.code === 'P2024' || // Connection pool timeout
+        err?.message?.includes('connect') ||
+        err?.message?.includes('ECONNRESET') ||
+        err?.message?.includes('ETIMEDOUT');
+      if (!isTransient || i === retries - 1) throw err;
+      const delay = 500 * (i + 1);
+      console.warn(`DB transient error (${err?.code}), retrying in ${delay}ms…`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 // Helper to get store credentials
