@@ -2,7 +2,7 @@ import { BaseAgent } from './base-agent.js';
 import { AgentConfig } from '../types/agents.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { SessionManager } from '../core/session-manager.js';
-import { loadSessionsForConversation } from '../lib/database.js';
+import { loadSessionsForConversation, prisma } from '../lib/database.js';
 
 /**
  * MajorAgent — Chief of Staff
@@ -30,10 +30,31 @@ export class MajorAgent extends BaseAgent {
    */
   protected async getAdditionalSystemContext(conversationId: string): Promise<string> {
     try {
-      const sessions = await loadSessionsForConversation(conversationId, this.config.id);
-      if (sessions.length === 0) return '';
+      // ── 1. Inject live squad roster (always up-to-date from DB) ──────────────
+      const activeAgents = await prisma.agent.findMany({
+        where: { storeId: this.config.storeId, isActive: true, NOT: { type: 'major' } },
+        select: { id: true, name: true, type: true, personality: true, capabilities: true },
+        orderBy: { createdAt: 'asc' },
+      });
 
-      const lines: string[] = ['\n\n## SQUAD CONVERSATION HISTORY\nYou have visibility into recent conversations between the user and your specialists. Use this context to avoid asking for information the user already provided to another agent.'];
+      const rosterLines: string[] = ['\n\n## CURRENT SQUAD ROSTER (live — always up-to-date)'];
+      rosterLines.push('These are your active specialists right now. Use their exact IDs when dispatching.\n');
+      for (const a of activeAgents) {
+        const caps = (a.capabilities as any)?.allowed?.join(', ') || 'general';
+        rosterLines.push(`- **${a.name}** (id: \`${a.id}\`) — type: ${a.type} | role: ${a.personality} | capabilities: ${caps}`);
+      }
+      if (activeAgents.length === 0) {
+        rosterLines.push('- No specialists registered yet. Use manage_agents to create your team.');
+      }
+
+      // ── 2. Inject recent conversations from specialists ───────────────────────
+      const sessions = await loadSessionsForConversation(conversationId, this.config.id);
+
+      const lines: string[] = [...rosterLines];
+
+      if (sessions.length === 0) return lines.join('\n');
+
+      lines.push('\n\n## SQUAD CONVERSATION HISTORY\nYou have visibility into recent conversations between the user and your specialists. Use this context to avoid asking for information the user already provided to another agent.');
 
       for (const session of sessions) {
         const history = (session.history as any[]) || [];
@@ -57,7 +78,7 @@ export class MajorAgent extends BaseAgent {
         }
       }
 
-      return lines.length > 1 ? lines.join('\n') : '';
+      return lines.join('\n');
     } catch {
       return '';
     }
