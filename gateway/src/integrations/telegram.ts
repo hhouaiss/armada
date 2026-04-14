@@ -17,7 +17,7 @@ import { SessionManager } from '../core/session-manager.js';
 import { getStoreCredentials, saveChatMessage, prisma } from '../lib/database.js';
 import { decryptToken } from '../lib/shopify-client.js';
 import { nanoid } from 'nanoid';
-import { runAutoDream } from '../workers/auto-dream.js';
+import { runAutoDream, setDreamEnabled, isDreamEnabled } from '../workers/auto-dream.js';
 import { setKairosEnabled } from '../workers/kairos-worker.js';
 
 // ─── chatId ↔ storeId mapping helpers ────────────────────────────────────────
@@ -220,6 +220,20 @@ export class TelegramIntegration {
         return;
       }
 
+      const arg = ctx.message?.text?.split(' ')[1]?.toLowerCase();
+
+      // /dream on | off — toggle the nightly schedule
+      if (arg === 'on' || arg === 'off') {
+        await setDreamEnabled(store.id, arg === 'on');
+        await ctx.reply(
+          arg === 'on'
+            ? '✅ AutoDream activé — consolidation mémoire chaque nuit à 03:00 UTC.'
+            : '⏸ AutoDream désactivé — plus de cycle nocturne automatique.'
+        );
+        return;
+      }
+
+      // /dream (no arg) — trigger manually
       const storeData = await prisma.store.findUnique({
         where: { id: store.id },
         select: { userId: true },
@@ -485,7 +499,7 @@ export class TelegramIntegration {
       { command: 'briefing', description: 'Briefing complet + priorités du jour' },
       { command: 'agents',   description: 'Liste des agents actifs' },
       { command: 'kairos',   description: 'Alertes proactives — /kairos on | off' },
-      { command: 'dream',    description: 'Consolider la mémoire (AutoDream)' },
+      { command: 'dream',    description: 'AutoDream — /dream on | off | (déclencher)' },
       { command: 'help',     description: 'Afficher l\'aide' },
     ]);
 

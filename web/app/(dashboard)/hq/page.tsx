@@ -72,7 +72,7 @@ export default function CommandCenterPage() {
     { refreshInterval: 30000 }
   );
 
-  const { data: workersData } = useSWR(
+  const { data: workersData, mutate: mutateWorkers } = useSWR(
     activeStoreId ? `/api/workers?storeId=${activeStoreId}` : null,
     fetcher,
     { refreshInterval: 60000 }
@@ -449,8 +449,13 @@ export default function CommandCenterPage() {
         )}
 
         {/* ── Workers / Daemons section ── */}
-        {workersData && (
-          <WorkersSection kairos={workersData.kairos} autoDream={workersData.autoDream} />
+        {workersData && activeStoreId && (
+          <WorkersSection
+            kairos={workersData.kairos}
+            autoDream={workersData.autoDream}
+            storeId={activeStoreId}
+            onToggle={mutateWorkers}
+          />
         )}
       </div>
     </div>
@@ -482,11 +487,22 @@ function nextDreamRun(): string {
 
 // ── Workers section component ──────────────────────────────────────────────────
 
-function WorkersSection({ kairos, autoDream }: {
+function WorkersSection({ kairos, autoDream, storeId, onToggle }: {
   kairos:    { enabled: boolean; lastTick: string | null };
-  autoDream: { lastRun: string | null; recentLogs: Array<{ date: string; decisionsCount: number; factsCount: number; hasContradictions: boolean; summary: string | null; ranAt: string }> };
+  autoDream: { enabled: boolean; lastRun: string | null; recentLogs: Array<{ date: string; decisionsCount: number; factsCount: number; hasContradictions: boolean; summary: string | null; ranAt: string }> };
+  storeId:   string;
+  onToggle:  () => void;
 }) {
   const lastLog = autoDream.recentLogs[0] ?? null;
+
+  async function toggleWorker(worker: 'kairos' | 'autoDream', enabled: boolean) {
+    await fetch('/api/workers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId, worker, enabled }),
+    });
+    onToggle();
+  }
 
   return (
     <motion.div
@@ -557,12 +573,20 @@ function WorkersSection({ kairos, autoDream }: {
                   </p>
                 </div>
               </div>
-              <Link
-                href="/settings"
-                className="flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border border-[var(--armada-accent)] text-[var(--armada-text)]/30 hover:text-[var(--armada-text)]/60 transition-colors"
+              <button
+                onClick={() => toggleWorker('kairos', !kairos.enabled)}
+                className="flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border transition-colors"
+                style={{
+                  borderColor: kairos.enabled ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.08)',
+                  backgroundColor: kairos.enabled ? 'rgba(59,130,246,0.10)' : 'transparent',
+                  color: kairos.enabled ? '#3b82f6' : 'rgba(255,255,255,0.25)',
+                }}
+                title={kairos.enabled ? 'Mettre en pause' : 'Activer'}
               >
-                <Settings className="h-3 w-3" />
-              </Link>
+                {kairos.enabled
+                  ? <Radio className="h-3 w-3" />
+                  : <Settings className="h-3 w-3" />}
+              </button>
             </div>
 
             {/* Stats row */}
@@ -600,13 +624,13 @@ function WorkersSection({ kairos, autoDream }: {
           className="relative rounded-2xl border overflow-hidden"
           style={{
             backgroundColor: 'var(--armada-surface)',
-            borderColor: 'rgba(168,85,247,0.25)',
+            borderColor: autoDream.enabled ? 'rgba(168,85,247,0.25)' : 'rgba(255,255,255,0.06)',
           }}
         >
           {/* Top accent bar */}
           <div
             className="absolute top-0 left-0 right-0 h-px"
-            style={{ background: 'linear-gradient(90deg, #a855f7 0%, transparent 100%)' }}
+            style={{ background: autoDream.enabled ? 'linear-gradient(90deg, #a855f7 0%, transparent 100%)' : 'transparent' }}
           />
 
           <div className="p-5 space-y-4">
@@ -622,19 +646,42 @@ function WorkersSection({ kairos, autoDream }: {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-serif text-sm text-[var(--armada-text)]">AutoDream</span>
-                    <span
-                      className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                      style={{ backgroundColor: 'rgba(168,85,247,0.12)', color: '#a855f7' }}
-                    >
-                      <Sparkles className="h-2 w-2" />
-                      Auto
-                    </span>
+                    {autoDream.enabled ? (
+                      <span
+                        className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                        style={{ backgroundColor: 'rgba(168,85,247,0.12)', color: '#a855f7' }}
+                      >
+                        <Sparkles className="h-2 w-2" />
+                        Auto
+                      </span>
+                    ) : (
+                      <span
+                        className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                        style={{ backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)' }}
+                      >
+                        En pause
+                      </span>
+                    )}
                   </div>
                   <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mt-0.5">
                     Consolidation mémoire — 03:00 UTC
                   </p>
                 </div>
               </div>
+              <button
+                onClick={() => toggleWorker('autoDream', !autoDream.enabled)}
+                className="flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border transition-colors"
+                style={{
+                  borderColor: autoDream.enabled ? 'rgba(168,85,247,0.35)' : 'rgba(255,255,255,0.08)',
+                  backgroundColor: autoDream.enabled ? 'rgba(168,85,247,0.10)' : 'transparent',
+                  color: autoDream.enabled ? '#a855f7' : 'rgba(255,255,255,0.25)',
+                }}
+                title={autoDream.enabled ? 'Mettre en pause' : 'Activer'}
+              >
+                {autoDream.enabled
+                  ? <Moon className="h-3 w-3" />
+                  : <Settings className="h-3 w-3" />}
+              </button>
             </div>
 
             {/* Stats row */}
@@ -654,8 +701,8 @@ function WorkersSection({ kairos, autoDream }: {
                 <p className="text-[9px] font-mono text-[var(--armada-text)]/35 uppercase tracking-widest mb-1">
                   Prochain cycle
                 </p>
-                <p className="text-xs font-mono" style={{ color: '#a855f7' }}>
-                  {nextDreamRun()}
+                <p className="text-xs font-mono" style={{ color: autoDream.enabled ? '#a855f7' : 'rgba(255,255,255,0.3)' }}>
+                  {autoDream.enabled ? nextDreamRun() : 'En pause'}
                 </p>
               </div>
             </div>

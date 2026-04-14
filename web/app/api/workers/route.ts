@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       where: {
         storeId,
         type: 'meta',
-        key: { in: ['kairos_last_tick', 'kairos_enabled', 'dream_last_run'] },
+        key: { in: ['kairos_last_tick', 'kairos_enabled', 'dream_last_run', 'dream_enabled'] },
       },
     });
 
@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
         lastTick: get('kairos_last_tick'),
       },
       autoDream: {
+        enabled:    get('dream_enabled') !== 'false',  // defaults to true if not set
         lastRun:    get('dream_last_run'),
         recentLogs: parsedLogs,
       },
@@ -64,5 +65,29 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching workers data:', error);
     return NextResponse.json({ error: 'Failed to fetch workers data' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as { storeId: string; worker: 'kairos' | 'autoDream'; enabled: boolean };
+    const { storeId, worker, enabled } = body;
+
+    if (!storeId || !worker || typeof enabled !== 'boolean') {
+      return NextResponse.json({ error: 'storeId, worker, and enabled required' }, { status: 400 });
+    }
+
+    const key = worker === 'kairos' ? 'kairos_enabled' : 'dream_enabled';
+
+    await prisma.agentMemory.upsert({
+      where:  { storeId_type_key: { storeId, type: 'meta', key } },
+      create: { storeId, type: 'meta', key, content: String(enabled) },
+      update: { content: String(enabled) },
+    });
+
+    return NextResponse.json({ ok: true, worker, enabled });
+  } catch (error) {
+    console.error('Error updating worker state:', error);
+    return NextResponse.json({ error: 'Failed to update worker' }, { status: 500 });
   }
 }

@@ -239,6 +239,26 @@ export async function runAutoDream(storeId: string, userId: string): Promise<voi
   }
 }
 
+// ─── Enable / disable helpers ─────────────────────────────────────────────────
+
+export async function isDreamEnabled(storeId: string): Promise<boolean> {
+  const record = await prisma.agentMemory
+    .findUnique({
+      where: { storeId_type_key: { storeId, type: 'meta', key: 'dream_enabled' } },
+    })
+    .catch(() => null);
+  // Default: enabled (undefined = not set = true)
+  return record ? record.content === 'true' : true;
+}
+
+export async function setDreamEnabled(storeId: string, enabled: boolean): Promise<void> {
+  await prisma.agentMemory.upsert({
+    where: { storeId_type_key: { storeId, type: 'meta', key: 'dream_enabled' } },
+    create: { storeId, type: 'meta', key: 'dream_enabled', content: String(enabled) },
+    update: { content: String(enabled) },
+  });
+}
+
 /** Called from the main setInterval — checks if any store needs a dream run. */
 export async function checkDreamSchedule(
   stores: Array<{ id: string; userId: string }>
@@ -251,6 +271,10 @@ export async function checkDreamSchedule(
 
   for (const store of stores) {
     try {
+      // Check enabled flag
+      const enabled = await isDreamEnabled(store.id);
+      if (!enabled) continue;
+
       // Check cooldown
       const lastRunRecord = await prisma.agentMemory.findUnique({
         where: { storeId_type_key: { storeId: store.id, type: 'meta', key: 'dream_last_run' } },
