@@ -1,4 +1,5 @@
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
+import { MemoryEngine } from '../lib/memory-engine.js';
 
 export const dispatchToSpecialistTool: AgentTool = {
   name: 'dispatch_to_specialist',
@@ -48,10 +49,39 @@ export const dispatchToSpecialistTool: AgentTool = {
 
     console.log(`\n📡 Major dispatching to ${specialist} (${agent.config.type}): "${task.substring(0, 60)}..."`);
 
+    // ── Detect future scheduling intent ─────────────────────────────────────
+    // If the task mentions a date or "tomorrow/demain", extract it and write
+    // to the agent's inbox so they remember even in fresh conversations.
+    const scheduledDate = extractScheduledDate(task);
+    const isFutureTask = scheduledDate !== null;
+
+    const engine = new MemoryEngine(context.storeId);
+
+    if (isFutureTask) {
+      // Write to inbox BEFORE dispatch — agent will see it the next time they chat
+      await engine.addToInbox(agent.config.id, {
+        task,
+        from: 'Major',
+        scheduledDate: scheduledDate ?? undefined,
+      });
+      console.log(`  📥 Task written to ${specialist}'s inbox (scheduled: ${scheduledDate})`);
+
+      // Still run the agent right now so they can acknowledge / plan
+    }
+
     const subConversationId = `major-dispatch-${context.operationId}-${specialist.toLowerCase()}`;
     const subContext = { ...context, agentId: agent.config.id };
 
     const response = await agent.chat(task, subContext, subConversationId);
+
+    // If not a future task, write to inbox AFTER successful execution
+    // (so the agent remembers what they committed to in this dispatch)
+    if (!isFutureTask) {
+      await engine.addToInbox(agent.config.id, {
+        task,
+        from: 'Major',
+      });
+    }
 
     return {
       success: true,
@@ -59,3 +89,36 @@ export const dispatchToSpecialistTool: AgentTool = {
     };
   },
 };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Tries to detect a scheduled date from the task description.
+ * Returns a YYYY-MM-DD string or null if no date intent is found.
+ */
+function extractScheduledDate(task: string): string | null {
+  const lower = task.toLowerCase();
+  const today = new Date();
+
+  // "tomorrow" / "demain"
+  if (/\bdemain\b|\btomorrow\b/.test(lower)) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  }
+
+  // "in X days" / "dans X jours"
+  const daysMatch = lower.match(/\bdans\s+(\d+)\s+jours?\b|\bin\s+(\d+)\s+days?\b/);
+  if (daysMatch) {
+    const n = parseInt(daysMatch[1] ?? daysMatch[2], 10);
+    const d = new Date(today);
+    d.setDate(d.getDate() + n);
+    return d.toISOString().split('T')[0];
+  }
+
+  // Explicit date patterns: "le 20 avril", "on April 20", "2026-04-20"
+  const isoMatch = task.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (isoMatch) return isoMatch[1];
+
+  return null;
+}

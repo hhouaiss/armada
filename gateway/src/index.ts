@@ -48,6 +48,7 @@ import { dispatchToSpecialistTool } from './tools/dispatch-agent.js';
 import { parallelDispatchTool } from './tools/parallel-dispatch.js';
 import { manageAgentsTool } from './tools/manage-agents.js';
 import { memoryReadTool, memoryWriteTool } from './tools/memory.js';
+import { inboxCompleteTool } from './tools/inbox.js';
 import { checkDreamSchedule } from './workers/auto-dream.js';
 import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
 
@@ -120,6 +121,7 @@ async function bootstrap() {
   // Register memory tools (available to all agents)
   toolRegistry.register(memoryReadTool);
   toolRegistry.register(memoryWriteTool);
+  toolRegistry.register(inboxCompleteTool);
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 

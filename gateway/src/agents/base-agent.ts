@@ -584,10 +584,13 @@ You are an AI agent for a Shopify store, powered by the StoreTeam platform.`;
 
     // Load memory index (Couche 1 — always injected, lightweight)
     const memoryEngine = new MemoryEngine(this.config.storeId);
-    const memorySummary = await memoryEngine.buildIndexSummary();
+    const [memorySummary, inboxSection] = await Promise.all([
+      memoryEngine.buildIndexSummary(),
+      memoryEngine.buildInboxSection(this.config.id),
+    ]);
     const memorySection = memorySummary ? `\n\n${memorySummary}` : '';
 
-    return `${systemPrompt}${skillsSection}${additionalContext}${memorySection}
+    return `${systemPrompt}${skillsSection}${additionalContext}${memorySection}${inboxSection}
 
 CURRENT DATE & TIME: ${now.toUTCString()} (today is ${todayStr})
 When working with date ranges, always use dates relative to today (${todayStr}). For "last 30 days" use ${last30StartStr} to ${todayStr}.
