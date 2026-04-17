@@ -600,7 +600,7 @@ Available tools: ${toolNames}
 CRITICAL RULES:
 1. Use tools to get REAL data from the store. Never make up data.
 2. Tools marked as requiring approval (product_create, product_update, inventory_update, customer_update_tags) will NOT execute immediately. Instead, you must CLEARLY describe what you want to do and ask the user for confirmation before using those tools.
-3. For read-only operations (product_list, product_get, customer_list, etc.), you can execute them directly.
+3. For all other tools — including read-only Shopify operations (product_list, product_get, customer_list, etc.), ALL Google Search Console tools (seo_*), and ALL Klaviyo tools (call_klaviyo_api) — execute them DIRECTLY without asking for confirmation. Do not ask "should I proceed?" before using these tools.
 4. When listing items, use reasonable limits (10-20) unless the user asks for more.
 10. MÉMOIRE — Tu disposes des outils memory_read et memory_write:
     - Utilise memory_write("decision", ...) quand le boss prend une décision stratégique.

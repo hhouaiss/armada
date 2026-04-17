@@ -19,7 +19,7 @@ export const callKlaviyoApiTool: AgentTool = {
   name: 'call_klaviyo_api',
   description: 'Execute any Klaviyo API call. Use this to manage campaigns, flows, lists, segments, profiles, metrics, templates, events — anything in the Klaviyo API. Consult the Klaviyo API reference at https://developers.klaviyo.com/en/reference for available endpoints.',
   category: 'marketing',
-  requiresApproval: true,
+  requiresApproval: false,
 
   inputSchema: {
     type: 'object',
