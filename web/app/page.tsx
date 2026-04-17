@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import Script from 'next/script';
 import { motion } from 'framer-motion';
 import {
@@ -88,18 +87,14 @@ function Navbar() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Link
-            href="/hq"
-            className="hidden md:block text-sm font-medium text-[var(--armada-text)]/60 hover:text-[var(--armada-primary)] transition-colors"
-          >
-            Connexion
-          </Link>
-          <Link
-            href="/hq"
+          <a
+            href="https://calendly.com/meet-alefia/armada-demo"
+            target="_blank"
+            rel="noopener noreferrer"
             className="bg-[var(--armada-text)] text-[var(--armada-bg)] px-5 py-2.5 rounded-full text-sm font-medium hover:bg-[var(--armada-primary)] hover:text-white transition-colors"
           >
-            Accéder au QG
-          </Link>
+            Demander une démo
+          </a>
         </div>
       </div>
     </nav>
@@ -160,16 +155,23 @@ function Hero() {
 
         {/* CTAs */}
         <motion.div {...fadeUp(0.3)} className="flex flex-col sm:flex-row items-center gap-4">
-          <Link
-            href="/hq"
+          <a
+            href="https://calendly.com/meet-alefia/armada-demo"
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-2 bg-[var(--armada-primary)] text-white px-8 py-4 rounded-full text-base font-medium hover:opacity-90 transition-all shadow-[0_0_40px_rgba(26,46,255,0.25)]"
           >
-            Déployer ma première équipe IA <ArrowRight className="w-4 h-4" aria-hidden="true" />
-          </Link>
-          <button className="flex items-center gap-2 bg-[var(--armada-surface)] border border-[var(--armada-accent)] text-[var(--armada-text)] px-8 py-4 rounded-full text-base font-medium hover:bg-[var(--armada-surface-hover)] transition-all">
+            Demander une démo <ArrowRight className="w-4 h-4" aria-hidden="true" />
+          </a>
+          <a
+            href="https://calendly.com/meet-alefia/armada-demo"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 bg-[var(--armada-surface)] border border-[var(--armada-accent)] text-[var(--armada-text)] px-8 py-4 rounded-full text-base font-medium hover:bg-[var(--armada-surface-hover)] transition-all"
+          >
             <Play className="w-4 h-4" aria-hidden="true" />
             Voir la démo
-          </button>
+          </a>
         </motion.div>
 
         {/* Réassurance */}
@@ -831,12 +833,14 @@ function CTA() {
           Déployez vos premiers agents IA en moins de 5 minutes.
         </motion.p>
         <motion.div {...fadeIn(0.3)}>
-          <Link
-            href="/hq"
+          <a
+            href="https://calendly.com/meet-alefia/armada-demo"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 bg-[var(--armada-text)] text-[var(--armada-bg)] px-10 py-5 rounded-full text-lg font-medium hover:bg-[var(--armada-primary)] hover:text-white transition-all shadow-xl hover:shadow-[0_0_40px_rgba(26,46,255,0.3)]"
           >
-            Accéder au Quartier Général <ArrowRight className="w-5 h-5" aria-hidden="true" />
-          </Link>
+            Demander une démo <ArrowRight className="w-5 h-5" aria-hidden="true" />
+          </a>
         </motion.div>
       </div>
     </section>

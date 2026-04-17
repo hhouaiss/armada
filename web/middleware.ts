@@ -30,6 +30,9 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Only this email can access the app during private beta
+  const ALLOWED_EMAIL = 'leggo.dblg@gmail.com';
+
   // Public routes that don't require auth
   const publicPaths = ['/', '/login', '/auth/callback', '/api/auth'];
   const isPublic =
@@ -37,15 +40,32 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon');
 
-  // If not authenticated and trying to access a protected route → login
-  if (!user && !isPublic) {
-    const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = '/login';
-    loginUrl.searchParams.set('next', pathname);
-    return NextResponse.redirect(loginUrl);
+  // Block /login for non-whitelisted visitors (redirect to landing)
+  if (!user && pathname === '/login') {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    url.search = '';
+    return NextResponse.redirect(url);
   }
 
-  // If authenticated and going to login → redirect to HQ
+  // If not authenticated and trying to access a protected route → landing
+  if (!user && !isPublic) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
+  // If authenticated but not whitelisted → sign out and redirect to landing
+  if (user && user.email !== ALLOWED_EMAIL) {
+    await supabase.auth.signOut();
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
+  // If authenticated (whitelisted) and going to login → redirect to HQ
   if (user && pathname === '/login') {
     const hqUrl = request.nextUrl.clone();
     hqUrl.pathname = '/hq';
