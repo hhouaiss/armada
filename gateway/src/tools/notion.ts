@@ -41,7 +41,7 @@ async function notionRequest(
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  const data = await res.json();
+  const data = await res.json() as any;
   if (!res.ok) {
     throw new Error(`Notion API error ${res.status}: ${data.message || JSON.stringify(data)}`);
   }
@@ -55,7 +55,7 @@ export const notionCreatePageTool: AgentTool = {
   description:
     'Create a new Notion page inside a parent page or database. Use this to create tasks, notes, reports, or any structured content.',
   category: 'notion',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       parent_id: {
@@ -141,7 +141,7 @@ export const notionSearchTool: AgentTool = {
   description:
     'Search across all Notion pages and databases the integration has access to.',
   category: 'notion',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       query: { type: 'string', description: 'The text to search for.' },
@@ -191,7 +191,7 @@ export const notionGetPageTool: AgentTool = {
   name: 'notion_get_page',
   description: 'Read the content and properties of a Notion page by its ID.',
   category: 'notion',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       page_id: { type: 'string', description: 'The ID of the Notion page to read.' },
@@ -232,7 +232,7 @@ export const notionQueryDatabaseTool: AgentTool = {
   description:
     'Query entries in a Notion database. Returns rows with their properties. Use to list tasks, projects, or any structured data.',
   category: 'notion',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       database_id: { type: 'string', description: 'The ID of the Notion database.' },
@@ -287,7 +287,7 @@ export const notionUpdatePageTool: AgentTool = {
   description:
     'Update properties of an existing Notion page or database entry (e.g. change status, title, due date).',
   category: 'notion',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       page_id: { type: 'string', description: 'The ID of the page to update.' },
