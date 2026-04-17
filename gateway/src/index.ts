@@ -48,6 +48,7 @@ import { dispatchToSpecialistTool } from './tools/dispatch-agent.js';
 import { parallelDispatchTool } from './tools/parallel-dispatch.js';
 import { manageAgentsTool } from './tools/manage-agents.js';
 import { memoryReadTool, memoryWriteTool } from './tools/memory.js';
+import { notionTools } from './tools/notion.js';
 import { inboxCompleteTool } from './tools/inbox.js';
 import { checkDreamSchedule } from './workers/auto-dream.js';
 import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
@@ -122,6 +123,11 @@ async function bootstrap() {
   toolRegistry.register(memoryReadTool);
   toolRegistry.register(memoryWriteTool);
   toolRegistry.register(inboxCompleteTool);
+
+  // Register Notion tools
+  for (const tool of notionTools) {
+    toolRegistry.register(tool);
+  }
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 
