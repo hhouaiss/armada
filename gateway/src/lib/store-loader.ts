@@ -48,7 +48,7 @@ interface StoreWithAgents {
  * Creates one in the DB if it doesn't exist yet.
  */
 const MAJOR_CAPABILITIES = {
-  allowed: ['products', 'inventory', 'customers', 'orders', 'collections', 'content', 'store', 'seo', 'marketing', 'orchestration'],
+  allowed: ['products', 'inventory', 'customers', 'orders', 'collections', 'content', 'store', 'seo', 'marketing', 'orchestration', 'notion'],
 };
 
 async function ensureMajorAgent(store: StoreWithAgents): Promise<StoreWithAgents['agents'][number]> {
@@ -58,7 +58,7 @@ async function ensureMajorAgent(store: StoreWithAgents): Promise<StoreWithAgents
     // Patch capabilities if 'marketing' is not yet in the allowed list
     const caps = (existing.capabilities as any) || {};
     const allowed: string[] = caps.allowed || [];
-    if (!allowed.includes('marketing')) {
+    if (!allowed.includes('marketing') || !allowed.includes('notion')) {
       await prisma.agent.update({
         where: { id: existing.id },
         data: { capabilities: MAJOR_CAPABILITIES },
