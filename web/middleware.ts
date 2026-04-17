@@ -40,12 +40,15 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon');
 
-  // Block /login for non-whitelisted visitors (redirect to landing)
+  // /login requires the secret access key stored in env
   if (!user && pathname === '/login') {
-    const url = request.nextUrl.clone();
-    url.pathname = '/';
-    url.search = '';
-    return NextResponse.redirect(url);
+    const accessKey = request.nextUrl.searchParams.get('access');
+    if (!process.env.LOGIN_ACCESS_KEY || accessKey !== process.env.LOGIN_ACCESS_KEY) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/';
+      url.search = '';
+      return NextResponse.redirect(url);
+    }
   }
 
   // If not authenticated and trying to access a protected route → landing
