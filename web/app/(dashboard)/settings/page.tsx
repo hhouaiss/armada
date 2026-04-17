@@ -656,6 +656,9 @@ function IntegrationsTab() {
                       onChange={(e) => setFormData(prev => ({ ...prev, [config.id]: { ...prev[config.id], [field.key]: e.target.value } }))}
                       className={inputClass}
                       style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
+                      autoComplete="off"
+                      data-lpignore="true"
+                      data-1p-ignore
                     />
                   </div>
                 ))}

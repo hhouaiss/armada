@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ integration });
+    return NextResponse.json({ ok: true, platform: integration.platform, isActive: integration.isActive });
   } catch (error) {
     console.error('Error saving integration:', error);
     return NextResponse.json(
