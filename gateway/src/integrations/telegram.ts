@@ -460,7 +460,7 @@ export class TelegramIntegration {
         'bilan de la nuit, métriques clés, 3 priorités du jour, ' +
         'et une recommandation proactive. Sois concis et actionnable.';
 
-      const response = await agent.chat(briefingPrompt, context, `briefing-${storeId}`);
+      const response = await agent.chat(briefingPrompt, context, `user-${storeId}`);
 
       const chunks = this.splitMessage(`☀️ *Briefing du matin*\n\n${response}`, 4000);
       for (const chunk of chunks) {

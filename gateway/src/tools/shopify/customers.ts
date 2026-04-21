@@ -46,6 +46,30 @@ export const listCustomersTool: ShopifyTool = {
   },
 };
 
+export const searchCustomersTool: ShopifyTool = {
+  name: 'customer_search',
+  description: 'Search customers by name, email, phone, or tag. Returns full customer details including email address. Use this to find a specific customer and retrieve their contact info.',
+  category: 'customers',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Search query — e.g. "john smith", "john@example.com", "+33612345678", or "tag:VIP"' },
+      limit: { type: 'number', description: 'Max results to return (default 10)' },
+    },
+    required: ['query'],
+  },
+
+  async execute(params: { query: string; limit?: number }, context: ToolContext): Promise<ToolResult> {
+    try {
+      const client = new ShopifyClient(context.shopifyDomain, context.shopifyAccessToken);
+      const response = await client.getCustomers({ query: params.query, limit: params.limit || 10 });
+      return { success: true, data: response };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to search customers' };
+    }
+  },
+};
+
 export const updateCustomerTagsTool: ShopifyTool = {
   name: 'customer_update_tags',
   description: 'Update customer tags for segmentation and organization. Use this to categorize customers (VIP, wholesale, etc.).',

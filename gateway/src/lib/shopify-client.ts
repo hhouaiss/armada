@@ -438,10 +438,10 @@ export class ShopifyClient {
 
   // ── Customers ──────────────────────────────────────────────────────────────
 
-  async getCustomers(params?: { limit?: number }) {
+  async getCustomers(params?: { limit?: number; query?: string }) {
     const data = await this.query(
-      `query GetCustomers($first: Int!) {
-        customers(first: $first) {
+      `query GetCustomers($first: Int!, $query: String) {
+        customers(first: $first, query: $query) {
           edges { node {
             id firstName lastName email phone tags
             numberOfOrders
@@ -449,7 +449,7 @@ export class ShopifyClient {
           }}
         }
       }`,
-      { first: params?.limit ?? 20 }
+      { first: params?.limit ?? 20, query: params?.query ?? null }
     );
     const customers = edges(data.customers).map(flattenCustomer);
     return { customers, total: customers.length };

@@ -23,6 +23,7 @@ import {
 import {
   getCustomerTool,
   listCustomersTool,
+  searchCustomersTool,
   updateCustomerTagsTool,
 } from './tools/shopify/customers.js';
 import {
@@ -85,6 +86,7 @@ async function bootstrap() {
   // Register customer tools
   toolRegistry.register(getCustomerTool);
   toolRegistry.register(listCustomersTool);
+  toolRegistry.register(searchCustomersTool);
   toolRegistry.register(updateCustomerTagsTool);
 
   // Register order tools (read-only)
