@@ -64,6 +64,8 @@ export const SUPPORTED_MODELS = {
     { id: 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo', name: 'Llama 3.1 8B', tier: 'fast' },
   ],
   openrouter: [
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'premium', pricing: '$0.50/$1.50 per 1M tokens' },
+    { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', tier: 'fast', pricing: '$0.07/$0.28 per 1M tokens' },
     { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5', tier: 'balanced' },
     { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B', tier: 'fast' },
   ],

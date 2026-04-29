@@ -30,6 +30,8 @@ const PROVIDERS = {
     name: 'OpenRouter (Open Source)',
     icon: '🌐',
     models: [
+      { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'Premium', pricing: '$0.50/$1.50 per 1M tokens', description: 'Most capable DeepSeek model — strong reasoning and coding, at open source cost' },
+      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', tier: 'Fast', pricing: '$0.07/$0.28 per 1M tokens', description: 'Ultra-low cost variant — ideal for high-volume tasks and quick responses' },
       { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5', tier: 'Premium', pricing: '$0.23/$3 per 1M tokens', description: 'Multimodal model with 262K context, excellent for visual coding and reasoning' },
       { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B', tier: 'Fast', pricing: 'Free / low cost', description: 'Google open source model, fast and efficient for everyday tasks' },
     ],

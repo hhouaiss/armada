@@ -25,9 +25,9 @@ const PROVIDERS = {
   openrouter: {
     name: 'OpenRouter (Open Source)',
     icon: '🌐',
-    description: 'Access open source models like Kimi K2.5, Llama, Mistral and more',
-    pricing: 'Varies by model – from free to $3/1M tokens',
-    models: ['Kimi K2.5 (262K context)', 'Gemma 4 31B (Google open source)', 'and 100+ open source models'],
+    description: 'Access open source models like DeepSeek V4, Kimi K2.5, Llama, Mistral and more',
+    pricing: 'Varies by model – from $0.07 to $3/1M tokens',
+    models: ['DeepSeek V4 Pro (capable)', 'DeepSeek V4 Flash (cheapest)', 'Kimi K2.5 (262K context)', 'and 100+ open source models'],
     keyPlaceholder: 'sk-or-...',
   },
 };
@@ -506,6 +506,8 @@ export default function ModelsSettingsPage() {
         <ul className="text-sm text-foreground/80 space-y-2">
           <li>• Use <strong>GPT-4o-mini</strong> for simple tasks - 97% cheaper than Claude Sonnet</li>
           <li>• Use <strong>o3</strong> for complex reasoning tasks - Best performance per dollar</li>
+          <li>• Use <strong>DeepSeek V4 Flash</strong> via OpenRouter for the cheapest high-quality open source option</li>
+          <li>• Use <strong>DeepSeek V4 Pro</strong> via OpenRouter for complex tasks at a fraction of Claude/GPT cost</li>
           <li>• Use <strong>Kimi K2.5</strong> via OpenRouter for 262K context at very low cost</li>
           <li>• Mix models per agent: cheap models for high-volume, premium for complex</li>
           <li>• All API keys are encrypted and stored securely</li>
