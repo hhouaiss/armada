@@ -16,6 +16,8 @@ import { decryptToken } from '../lib/shopify-client.js';
 import { registerStoreAgents } from '../lib/store-loader.js';
 import { runAutoDream } from '../workers/auto-dream.js';
 import { runKairosTick, setKairosEnabled, setKairosThresholds } from '../workers/kairos-worker.js';
+import { MemoryEngine } from '../lib/memory-engine.js';
+import { createLLMProvider } from '../lib/llm/provider-factory.js';
 
 interface Connection {
   id: string;
@@ -515,6 +517,191 @@ export class Gateway {
         console.error('Error updating KAIROS settings:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to update KAIROS settings' }));
+      }
+      return;
+    }
+
+    // ── Objective analysis: POST /api/objectives/analyze ───────────────────
+    if (method === 'POST' && url === '/api/objectives/analyze') {
+      try {
+        const body = await this.readBody(req);
+        const { storeId, objectiveId } = JSON.parse(body);
+
+        if (!storeId || !objectiveId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'storeId and objectiveId are required' }));
+          return;
+        }
+
+        // Load objective
+        const objective = await prisma.objective.findUnique({
+          where: { id: objectiveId },
+          include: { projects: { select: { id: true, description: true, status: true } } },
+        });
+
+        if (!objective || objective.storeId !== storeId) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Objective not found' }));
+          return;
+        }
+
+        // Load active agents for this store
+        const agents = await prisma.agent.findMany({
+          where: { storeId, isActive: true },
+          select: { id: true, type: true, name: true, personality: true, capabilities: true },
+        });
+
+        // Load Major for userId / model config
+        const major = agents.find((a) => a.type === 'major') ?? agents[0];
+        if (!major) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No agents configured for this store' }));
+          return;
+        }
+
+        // Get store's userId for LLM key lookup
+        const store = await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { userId: true },
+        });
+        if (!store) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Store not found' }));
+          return;
+        }
+
+        // Build agent roster summary for the prompt
+        const rosterText = agents
+          .filter((a) => a.type !== 'major')
+          .map((a) => {
+            const role = a.personality?.split(' — ')[0] ?? a.type;
+            const caps = (a.capabilities as { allowed?: string[] })?.allowed?.join(', ') ?? '';
+            return `- ${a.name} (${a.type}): ${role}${caps ? ' | Outils: ' + caps : ''}`;
+          })
+          .join('\n');
+
+        const planningPrompt = `Tu es The Major, le commandant de l'équipe Armada. Tu dois créer un plan d'action précis pour l'objectif suivant.
+
+OBJECTIF : ${objective.title}
+${objective.description ? `DESCRIPTION : ${objective.description}` : ''}
+PRIORITÉ : ${objective.priority}
+TYPE : ${objective.type}
+${objective.dueDate ? `ÉCHÉANCE : ${new Date(objective.dueDate).toLocaleDateString('fr-FR')}` : ''}
+
+ÉQUIPE DISPONIBLE :
+${rosterText}
+
+Analyse cet objectif et décompose-le en tâches concrètes, une par agent concerné. Assigne chaque tâche à l'agent le plus adapté.
+
+Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
+{
+  "analysis": "2-3 phrases résumant la stratégie globale pour atteindre cet objectif",
+  "tasks": [
+    {
+      "agentType": "type_exact_de_lagent",
+      "agentName": "Prénom de l'agent",
+      "task": "Description précise et actionnable de ce que doit faire cet agent (2-3 phrases)",
+      "rationale": "Pourquoi cet agent est le mieux placé pour cette tâche",
+      "priority": "high|medium|low",
+      "estimatedDays": 2
+    }
+  ]
+}
+
+Règles :
+- Maximum 4 tâches, uniquement les agents vraiment nécessaires
+- Chaque tâche doit être immédiatement exécutable
+- Le type d'agent doit être EXACTEMENT l'un de : ${agents.filter(a => a.type !== 'major').map(a => a.type).join(', ')}
+- Réponds uniquement en JSON, sans markdown, sans explication`;
+
+        // Create LLM provider — try multiple providers in order of preference
+        let llm: Awaited<ReturnType<typeof createLLMProvider>> | null = null;
+        for (const providerName of ['openai', 'anthropic', 'openrouter']) {
+          try {
+            llm = await createLLMProvider(store.userId, providerName, providerName === 'openai' ? 'gpt-4o' : providerName === 'anthropic' ? 'claude-3-5-haiku-20241022' : 'anthropic/claude-3-5-haiku');
+            break;
+          } catch {
+            // try next provider
+          }
+        }
+
+        if (!llm) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No LLM provider available. Please configure an API key in Settings → Models.' }));
+          return;
+        }
+
+        const response = await llm.chat({
+          messages: [{ role: 'user', content: planningPrompt }],
+          maxTokens: 1500,
+        });
+
+        // Parse JSON from response
+        let plan: { analysis: string; tasks: any[] };
+        try {
+          const text = response.content.trim();
+          // Strip markdown code blocks if present
+          const jsonStr = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+          plan = JSON.parse(jsonStr);
+        } catch {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to parse planning response', raw: response.content.slice(0, 500) }));
+          return;
+        }
+
+        // Enrich tasks with agent details from DB
+        plan.tasks = plan.tasks.map((t: any) => {
+          const agent = agents.find((a) => a.type === t.agentType);
+          return {
+            ...t,
+            agentName: agent?.name ?? t.agentName,
+            agentPersonality: agent?.personality ?? '',
+          };
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ plan, objectiveTitle: objective.title }));
+      } catch (error) {
+        console.error('Error analyzing objective:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to analyze objective' }));
+      }
+      return;
+    }
+
+    // ── Inbox dispatch: POST /api/inbox/dispatch ────────────────────────────
+    if (method === 'POST' && url === '/api/inbox/dispatch') {
+      try {
+        const body = await this.readBody(req);
+        const { storeId, tasks } = JSON.parse(body) as {
+          storeId: string;
+          tasks: Array<{ agentType: string; task: string; from: string; scheduledDate?: string }>;
+        };
+
+        if (!storeId || !Array.isArray(tasks)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'storeId and tasks[] are required' }));
+          return;
+        }
+
+        const engine = new MemoryEngine(storeId);
+        let dispatched = 0;
+
+        for (const t of tasks) {
+          await engine.addToInbox(t.agentType, {
+            task: t.task,
+            from: t.from || 'Mission Control',
+            scheduledDate: t.scheduledDate,
+          });
+          dispatched++;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, dispatched }));
+      } catch (error) {
+        console.error('Error dispatching to inboxes:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to dispatch tasks' }));
       }
       return;
     }

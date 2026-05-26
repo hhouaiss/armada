@@ -7,6 +7,7 @@ import {
   CheckCircle2, AlertCircle, Clock, Pause, Loader2,
   Calendar, Bot, Zap, Shield, Users,
   X, Check, TrendingUp, DollarSign, Megaphone, Heart,
+  Sparkles, SendHorizonal, Package, Globe, BarChart2,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 
@@ -27,7 +28,7 @@ interface Objective {
   description?: string;
   type: 'mission' | 'quarterly' | 'weekly' | 'onetime';
   priority: 1 | 2 | 3;
-  status: 'active' | 'completed' | 'archived' | 'blocked';
+  status: 'backlog' | 'active' | 'completed' | 'archived' | 'blocked';
   dueDate?: string;
   notes?: string;
   projects: Project[];
@@ -52,6 +53,29 @@ interface Department {
   specialty: string;
   capabilities: string[];
   deployed: boolean;
+  coveredBy?: string;
+  coveredByName?: string;
+}
+
+interface PlanTask {
+  agentType: string;
+  agentName: string;
+  agentPersonality?: string;
+  task: string;
+  rationale?: string;
+  priority?: 'high' | 'medium' | 'low';
+  estimatedDays?: number;
+}
+
+interface Plan {
+  analysis: string;
+  tasks: PlanTask[];
+}
+
+interface PendingPlan {
+  objectiveId: string;
+  objectiveTitle: string;
+  plan: Plan;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -70,19 +94,40 @@ const PRIORITY_CONFIG: Record<number, { label: string; color: string; dot: strin
 };
 
 const STATUS_CONFIG: Record<string, { label: string; Icon: any; color: string }> = {
-  active:    { label: 'Actif',    Icon: Zap,           color: 'text-[var(--armada-primary)]' },
-  completed: { label: 'Terminé', Icon: CheckCircle2,  color: 'text-emerald-400' },
-  blocked:   { label: 'Bloqué',  Icon: AlertCircle,   color: 'text-red-400' },
-  archived:  { label: 'Archivé', Icon: Clock,         color: 'text-[var(--armada-text)]/30' },
-  paused:    { label: 'Pausé',   Icon: Pause,         color: 'text-amber-400' },
+  backlog:   { label: 'En attente', Icon: Clock,         color: 'text-[var(--armada-text)]/30' },
+  active:    { label: 'Actif',      Icon: Zap,           color: 'text-[var(--armada-primary)]' },
+  completed: { label: 'Terminé',    Icon: CheckCircle2,  color: 'text-emerald-400' },
+  blocked:   { label: 'Bloqué',     Icon: AlertCircle,   color: 'text-red-400' },
+  archived:  { label: 'Archivé',    Icon: Clock,         color: 'text-[var(--armada-text)]/30' },
+  paused:    { label: 'Pausé',      Icon: Pause,         color: 'text-amber-400' },
 };
 
 const RISK_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   low:      { label: 'Faible',    color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
-  medium:   { label: 'Moyen',    color: 'text-amber-400',   bg: 'bg-amber-400/10' },
-  high:     { label: 'Élevé',    color: 'text-red-400',     bg: 'bg-red-400/10' },
-  critical: { label: 'Critique', color: 'text-red-600',     bg: 'bg-red-600/10' },
+  medium:   { label: 'Moyen',     color: 'text-amber-400',   bg: 'bg-amber-400/10' },
+  high:     { label: 'Élevé',     color: 'text-red-400',     bg: 'bg-red-400/10' },
+  critical: { label: 'Critique',  color: 'text-red-600',     bg: 'bg-red-600/10' },
 };
+
+// Dept icon/color for plan task cards
+const AGENT_DEPT_ICON: Record<string, any> = {
+  growth: TrendingUp, finance: BarChart2, ads: Megaphone, cx: Heart,
+  content: Globe, seo: Globe, product: Package, inventory: Package,
+  email: Megaphone, klaviyo: Megaphone,
+};
+const AGENT_DEPT_COLOR: Record<string, string> = {
+  growth: '#8b5cf6', finance: '#06b6d4', ads: '#f59e0b', cx: '#ec4899',
+  content: '#10b981', seo: '#10b981', product: '#6366f1', inventory: '#6366f1',
+  email: '#f59e0b', klaviyo: '#f59e0b',
+};
+
+function agentDeptKey(type: string): string {
+  const t = type.toLowerCase();
+  for (const key of ['growth', 'finance', 'ads', 'cx', 'content', 'seo', 'product', 'inventory', 'email', 'klaviyo']) {
+    if (t.includes(key)) return key;
+  }
+  return 'ops';
+}
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -101,6 +146,12 @@ export default function ObjectivesPage() {
   const [statusFilter, setStatusFilter] = useState<'active' | 'all'>('active');
   const [saving, setSaving] = useState(false);
 
+  // ── Plan modal state ───────────────────────────────────────────────────────
+  const [analyzing, setAnalyzing] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -111,9 +162,7 @@ export default function ObjectivesPage() {
   });
 
   useEffect(() => {
-    if (storeId) {
-      loadAll();
-    }
+    if (storeId) loadAll();
   }, [storeId, statusFilter]);
 
   async function loadAll() {
@@ -130,7 +179,6 @@ export default function ObjectivesPage() {
       setObjectives(objData.objectives || []);
       setApprovals(appData.approvals || []);
       setDepartments(deptData.departments || []);
-      // Auto-expand high-priority active ones
       const highPrioIds = (objData.objectives || [])
         .filter((o: Objective) => o.priority === 3 && o.status === 'active')
         .map((o: Objective) => o.id);
@@ -161,22 +209,98 @@ export default function ObjectivesPage() {
     }
   }
 
+  // ── Create + immediately analyze ──────────────────────────────────────────
   async function createObjective() {
     if (!form.title.trim() || !storeId) return;
     setSaving(true);
+    setAnalyzeError(null);
     try {
+      // 1. Save objective (as backlog)
       const res = await fetch('/api/objectives', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, ...form }),
+        body: JSON.stringify({ storeId, ...form, status: 'backlog' }),
       });
-      if (res.ok) {
-        setForm({ title: '', description: '', type: 'quarterly', priority: 2, dueDate: '', notes: '' });
-        setShowCreate(false);
-        await loadAll();
+      if (!res.ok) return;
+      const { objective: created } = await res.json();
+
+      // 2. Close form, refresh list
+      setForm({ title: '', description: '', type: 'quarterly', priority: 2, dueDate: '', notes: '' });
+      setShowCreate(false);
+      await loadAll();
+
+      // 3. Open modal with spinner and start analysis
+      setAnalyzing(true);
+      setPendingPlan(null);
+
+      const analyzeRes = await fetch(`/api/objectives/${created.id}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const analyzeData = await analyzeRes.json();
+
+      if (!analyzeRes.ok || !analyzeData.plan) {
+        setAnalyzeError(analyzeData.error ?? 'The Major n\'a pas pu analyser cet objectif.');
+        return;
       }
+
+      setPendingPlan({
+        objectiveId: created.id,
+        objectiveTitle: created.title ?? form.title,
+        plan: analyzeData.plan,
+      });
     } finally {
       setSaving(false);
+      setAnalyzing(false);
+    }
+  }
+
+  // ── Analyze an existing objective ─────────────────────────────────────────
+  async function analyzeObjective(obj: Objective) {
+    if (!storeId) return;
+    setAnalyzeError(null);
+    setAnalyzing(true);
+    setPendingPlan(null);
+
+    try {
+      const res = await fetch(`/api/objectives/${obj.id}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.plan) {
+        setAnalyzeError(data.error ?? 'Erreur lors de l\'analyse.');
+        setAnalyzing(false);
+        return;
+      }
+
+      setPendingPlan({
+        objectiveId: obj.id,
+        objectiveTitle: obj.title,
+        plan: data.plan,
+      });
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  // ── Confirm and dispatch plan ─────────────────────────────────────────────
+  async function confirmPlan() {
+    if (!pendingPlan || !storeId) return;
+    setConfirming(true);
+    try {
+      await fetch(`/api/objectives/${pendingPlan.objectiveId}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, tasks: pendingPlan.plan.tasks }),
+      });
+      setPendingPlan(null);
+      await loadAll();
+    } finally {
+      setConfirming(false);
     }
   }
 
@@ -214,11 +338,31 @@ export default function ObjectivesPage() {
 
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
 
+  // Show plan modal when analyzing or plan is ready
+  const showPlanModal = analyzing || !!pendingPlan || !!analyzeError;
+
   return (
     <div
       className="min-h-screen p-6 space-y-6"
       style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
     >
+      {/* ── Plan Modal ──────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showPlanModal && (
+          <PlanModal
+            analyzing={analyzing}
+            plan={pendingPlan}
+            error={analyzeError}
+            confirming={confirming}
+            onConfirm={confirmPlan}
+            onDismiss={() => {
+              setPendingPlan(null);
+              setAnalyzeError(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="border-b border-[var(--armada-accent)]/50 pb-5 flex items-start justify-between">
         <div>
@@ -266,9 +410,12 @@ export default function ObjectivesPage() {
             ) : (
               <>
                 <Users className="w-3.5 h-3.5" /> Départements
-                {departments.filter((d) => !d.deployed).length > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold text-white" style={{ backgroundColor: 'var(--armada-primary)' }}>
-                    {departments.filter((d) => !d.deployed).length}
+                {departments.filter((d) => !d.deployed && !d.coveredBy).length > 0 && (
+                  <span
+                    className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: 'var(--armada-primary)' }}
+                  >
+                    {departments.filter((d) => !d.deployed && !d.coveredBy).length}
                   </span>
                 )}
               </>
@@ -306,7 +453,12 @@ export default function ObjectivesPage() {
             style={{ backgroundColor: 'var(--armada-card)', borderColor: 'var(--armada-accent)' }}
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--armada-text)]">Nouvel objectif</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-[var(--armada-text)]">Nouvel objectif</h2>
+                <span className="text-xs text-[var(--armada-text)]/30">
+                  — The Major analysera et proposera un plan d'action
+                </span>
+              </div>
               <button onClick={() => setShowCreate(false)} className="text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]">
                 <X className="w-4 h-4" />
               </button>
@@ -318,6 +470,7 @@ export default function ObjectivesPage() {
                 placeholder="Titre de l'objectif (ex: Augmenter les ventes de 30% ce trimestre)"
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
+                onKeyDown={(e) => e.key === 'Enter' && createObjective()}
                 className="w-full px-4 py-2.5 rounded-xl text-sm border outline-none"
                 style={{
                   backgroundColor: 'var(--armada-bg)',
@@ -408,8 +561,12 @@ export default function ObjectivesPage() {
                 className="flex items-center gap-2 px-5 py-2 rounded-full text-white text-sm font-medium disabled:opacity-40 transition-all hover:opacity-90"
                 style={{ backgroundColor: 'var(--armada-primary)' }}
               >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Créer l'objectif
+                {saving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+                {saving ? 'The Major analyse...' : 'Créer & Analyser avec The Major'}
               </button>
               <button
                 onClick={() => setShowCreate(false)}
@@ -440,8 +597,8 @@ export default function ObjectivesPage() {
                 Aucun objectif {statusFilter === 'active' ? 'actif' : ''}.
               </p>
               <p className="text-[var(--armada-text)]/30 text-xs max-w-sm mx-auto">
-                Créez votre premier objectif — The Major le lira à chaque session
-                et dispatche l'équipe pour l'atteindre.
+                Créez votre premier objectif — The Major le décompose en tâches
+                et dispatche l'équipe automatiquement.
               </p>
               <button
                 onClick={() => setShowCreate(true)}
@@ -461,6 +618,7 @@ export default function ObjectivesPage() {
               onToggle={() => toggleExpand(obj.id)}
               onStatusChange={(s) => updateStatus(obj.id, s)}
               onDelete={() => deleteObjective(obj.id)}
+              onAnalyze={() => analyzeObjective(obj)}
             />
           ))}
         </div>
@@ -495,7 +653,6 @@ export default function ObjectivesPage() {
       {/* ── Departments Tab ──────────────────────────────────────────── */}
       {!loading && activeTab === 'departments' && (
         <div className="space-y-5">
-          {/* Info banner */}
           <div
             className="rounded-2xl border p-4 flex items-start gap-3"
             style={{
@@ -506,14 +663,14 @@ export default function ObjectivesPage() {
             <Zap className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--armada-primary)' }} />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-[var(--armada-text)] mb-0.5">
-                Nouveaux départements stratégiques
+                Départements stratégiques
               </p>
               <p className="text-xs text-[var(--armada-text)]/50 leading-relaxed">
-                Déployez les 4 nouveaux départements pour couvrir toutes les fonctions business.
-                Après déploiement, redémarrez le gateway pour activer les agents.
+                Déployez les agents manquants pour couvrir toutes les fonctions business.
+                Les agents existants couvrant déjà un département sont mis à jour automatiquement.
               </p>
             </div>
-            {departments.some((d) => !d.deployed) && (
+            {departments.some((d) => !d.deployed && !d.coveredBy) && (
               <button
                 onClick={deployAllDepartments}
                 disabled={deploying}
@@ -526,7 +683,6 @@ export default function ObjectivesPage() {
             )}
           </div>
 
-          {/* Department cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {departments.map((dept) => (
               <DepartmentCard key={dept.type} dept={dept} />
@@ -538,6 +694,238 @@ export default function ObjectivesPage() {
   );
 }
 
+// ─── PlanModal ────────────────────────────────────────────────────────────────
+
+function PlanModal({
+  analyzing,
+  plan,
+  error,
+  confirming,
+  onConfirm,
+  onDismiss,
+}: {
+  analyzing: boolean;
+  plan: PendingPlan | null;
+  error: string | null;
+  confirming: boolean;
+  onConfirm: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className="w-full max-w-2xl rounded-2xl border overflow-hidden shadow-2xl"
+        style={{ backgroundColor: 'var(--armada-card)', borderColor: 'var(--armada-accent)' }}
+      >
+        {/* Modal Header */}
+        <div
+          className="flex items-center justify-between px-5 py-4 border-b"
+          style={{ borderColor: 'var(--armada-accent)' }}
+        >
+          <div className="flex items-center gap-2.5">
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 15%, transparent)' }}
+            >
+              <Bot className="w-4 h-4" style={{ color: 'var(--armada-primary)' }} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[var(--armada-text)]">The Major — Plan d'action</p>
+              {plan && (
+                <p className="text-xs text-[var(--armada-text)]/40 truncate max-w-xs">{plan.objectiveTitle}</p>
+              )}
+            </div>
+          </div>
+          {!analyzing && (
+            <button
+              onClick={onDismiss}
+              className="text-[var(--armada-text)]/30 hover:text-[var(--armada-text)] transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Modal Body */}
+        <div className="p-5 max-h-[65vh] overflow-y-auto space-y-4">
+          {/* Analyzing state */}
+          {analyzing && !plan && !error && (
+            <div className="flex flex-col items-center justify-center py-12 gap-4">
+              <div className="relative">
+                <div
+                  className="w-12 h-12 rounded-xl flex items-center justify-center"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 10%, transparent)' }}
+                >
+                  <Sparkles className="w-6 h-6" style={{ color: 'var(--armada-primary)' }} />
+                </div>
+                <Loader2
+                  className="w-16 h-16 animate-spin absolute -inset-2"
+                  style={{ color: 'color-mix(in srgb, var(--armada-primary) 30%, transparent)' }}
+                />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-[var(--armada-text)]">The Major analyse l'objectif…</p>
+                <p className="text-xs text-[var(--armada-text)]/40 mt-1">
+                  Identification des agents et création du plan de tâches
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Error state */}
+          {error && (
+            <div className="rounded-xl p-4 border border-red-500/20 bg-red-500/5 space-y-2">
+              <p className="text-sm font-medium text-red-400 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" /> Erreur d'analyse
+              </p>
+              <p className="text-xs text-red-400/70">{error}</p>
+              <p className="text-xs text-[var(--armada-text)]/30">
+                Vérifiez qu'une clé API est configurée dans Paramètres → Modèles.
+              </p>
+            </div>
+          )}
+
+          {/* Plan */}
+          {plan && (
+            <>
+              {/* Analysis text */}
+              <div
+                className="rounded-xl p-4 border-l-2 text-sm text-[var(--armada-text)]/70 leading-relaxed"
+                style={{
+                  backgroundColor: 'var(--armada-bg)',
+                  borderLeftColor: 'var(--armada-primary)',
+                }}
+              >
+                {plan.plan.analysis}
+              </div>
+
+              {/* Task cards */}
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-[var(--armada-text)]/30 uppercase tracking-wider">
+                  {plan.plan.tasks.length} tâche{plan.plan.tasks.length > 1 ? 's' : ''} à dispatcher
+                </p>
+
+                {plan.plan.tasks.map((task, i) => {
+                  const deptKey = agentDeptKey(task.agentType);
+                  const Icon = AGENT_DEPT_ICON[deptKey] ?? Bot;
+                  const color = AGENT_DEPT_COLOR[deptKey] ?? 'var(--armada-primary)';
+                  const roleLabel = task.agentPersonality?.split(' — ')[0] ?? task.agentType;
+
+                  return (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.08 }}
+                      className="rounded-xl border p-4 space-y-2"
+                      style={{
+                        backgroundColor: 'var(--armada-bg)',
+                        borderColor: `${color}30`,
+                        borderLeftWidth: '3px',
+                        borderLeftColor: color,
+                      }}
+                    >
+                      {/* Agent info */}
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                          style={{ backgroundColor: `${color}15` }}
+                        >
+                          <Icon className="w-3.5 h-3.5" style={{ color }} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-[var(--armada-text)]">
+                              {task.agentName}
+                            </span>
+                            {task.priority && (
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                                style={{
+                                  backgroundColor: task.priority === 'high' ? 'rgba(239,68,68,0.1)' : task.priority === 'medium' ? 'rgba(245,158,11,0.1)' : 'rgba(99,102,241,0.1)',
+                                  color: task.priority === 'high' ? '#ef4444' : task.priority === 'medium' ? '#f59e0b' : '#6366f1',
+                                }}
+                              >
+                                {task.priority === 'high' ? 'Priorité haute' : task.priority === 'medium' ? 'Moyen' : 'Faible'}
+                              </span>
+                            )}
+                            {task.estimatedDays && (
+                              <span className="text-[10px] text-[var(--armada-text)]/30 ml-auto">
+                                ~{task.estimatedDays}j
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-[var(--armada-text)]/40 truncate">{roleLabel}</p>
+                        </div>
+                      </div>
+
+                      {/* Task description */}
+                      <p className="text-xs text-[var(--armada-text)]/70 leading-relaxed pl-9">
+                        {task.task}
+                      </p>
+
+                      {/* Rationale */}
+                      {task.rationale && (
+                        <p className="text-[10px] text-[var(--armada-text)]/30 leading-relaxed pl-9 italic">
+                          {task.rationale}
+                        </p>
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Modal Footer */}
+        {!analyzing && (
+          <div
+            className="flex items-center justify-between px-5 py-4 border-t"
+            style={{ borderColor: 'var(--armada-accent)' }}
+          >
+            <button
+              onClick={onDismiss}
+              className="px-4 py-2 rounded-full text-sm border hover:border-[var(--armada-text)]/40 transition-all"
+              style={{ borderColor: 'var(--armada-accent)', color: 'var(--armada-text)/50' }}
+            >
+              {plan ? 'Plus tard' : 'Fermer'}
+            </button>
+
+            {plan && (
+              <button
+                onClick={onConfirm}
+                disabled={confirming}
+                className="flex items-center gap-2 px-5 py-2 rounded-full text-white text-sm font-medium disabled:opacity-50 transition-all hover:opacity-90"
+                style={{ backgroundColor: 'var(--armada-primary)' }}
+              >
+                {confirming ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <SendHorizonal className="w-4 h-4" />
+                )}
+                {confirming
+                  ? 'Dispatch en cours…'
+                  : `Confirmer & Lancer ${plan.plan.tasks.length} tâche${plan.plan.tasks.length > 1 ? 's' : ''}`}
+              </button>
+            )}
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── ObjectiveCard ────────────────────────────────────────────────────────────
 
 function ObjectiveCard({
@@ -546,12 +934,14 @@ function ObjectiveCard({
   onToggle,
   onStatusChange,
   onDelete,
+  onAnalyze,
 }: {
   objective: Objective;
   expanded: boolean;
   onToggle: () => void;
   onStatusChange: (s: string) => void;
   onDelete: () => void;
+  onAnalyze: () => void;
 }) {
   const typeConfig = OBJECTIVE_TYPES[objective.type] ?? OBJECTIVE_TYPES.onetime;
   const priority = PRIORITY_CONFIG[objective.priority] ?? PRIORITY_CONFIG[2];
@@ -560,51 +950,46 @@ function ObjectiveCard({
 
   const activeProjects = objective.projects.filter((p) => p.status === 'active');
   const completedProjects = objective.projects.filter((p) => p.status === 'completed');
+  const isBacklog = objective.status === 'backlog';
 
   return (
     <motion.div
       layout
       className="rounded-2xl border overflow-hidden"
-      style={{ backgroundColor: 'var(--armada-card)', borderColor: 'var(--armada-accent)' }}
+      style={{
+        backgroundColor: 'var(--armada-card)',
+        borderColor: isBacklog ? 'color-mix(in srgb, var(--armada-primary) 20%, var(--armada-accent))' : 'var(--armada-accent)',
+      }}
     >
       {/* Header */}
       <div
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
         onClick={onToggle}
       >
-        {/* Priority dot */}
         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${priority.dot}`} />
 
-        {/* Type badge */}
         <span
           className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
-          style={{
-            backgroundColor: `${typeConfig.color}18`,
-            color: typeConfig.color,
-          }}
+          style={{ backgroundColor: `${typeConfig.color}18`, color: typeConfig.color }}
         >
           {typeConfig.icon} {typeConfig.label}
         </span>
 
-        {/* Title */}
         <span className="text-sm font-medium text-[var(--armada-text)] flex-1 min-w-0 truncate">
           {objective.title}
         </span>
 
-        {/* Status */}
         <span className={`text-xs flex items-center gap-1 flex-shrink-0 ${status.color}`}>
           <StatusIcon className="w-3 h-3" />
           {status.label}
         </span>
 
-        {/* Projects count */}
         {objective.projects.length > 0 && (
           <span className="text-xs text-[var(--armada-text)]/30 flex-shrink-0">
             {completedProjects.length}/{objective.projects.length} projets
           </span>
         )}
 
-        {/* Due date */}
         {objective.dueDate && (
           <span className="text-xs text-[var(--armada-text)]/30 flex items-center gap-1 flex-shrink-0">
             <Calendar className="w-3 h-3" />
@@ -632,14 +1017,12 @@ function ObjectiveCard({
               className="px-4 pb-4 space-y-4 border-t"
               style={{ borderColor: 'var(--armada-accent)' }}
             >
-              {/* Description */}
               {objective.description && (
                 <p className="text-sm text-[var(--armada-text)]/60 pt-4 leading-relaxed">
                   {objective.description}
                 </p>
               )}
 
-              {/* Notes */}
               {objective.notes && (
                 <div
                   className="rounded-xl p-3 text-xs text-[var(--armada-text)]/50 leading-relaxed"
@@ -650,7 +1033,7 @@ function ObjectiveCard({
                 </div>
               )}
 
-              {/* Projects */}
+              {/* Projects or empty state */}
               {objective.projects.length > 0 ? (
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-[var(--armada-text)]/30 uppercase tracking-wider">
@@ -662,16 +1045,35 @@ function ObjectiveCard({
                 </div>
               ) : (
                 <div
-                  className="rounded-xl p-3 text-center text-xs text-[var(--armada-text)]/30"
+                  className="rounded-xl p-4 space-y-3"
                   style={{ backgroundColor: 'var(--armada-bg)' }}
                 >
-                  <Bot className="w-4 h-4 mx-auto mb-1 opacity-40" />
-                  The Major créera des projets pour atteindre cet objectif
+                  <div className="flex items-center gap-2 text-xs text-[var(--armada-text)]/40">
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>Aucun projet dispatché — lancez The Major pour planifier</span>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onAnalyze(); }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium text-white transition-all hover:opacity-90"
+                    style={{ backgroundColor: 'var(--armada-primary)' }}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Analyser avec The Major
+                  </button>
                 </div>
               )}
 
               {/* Actions */}
-              <div className="flex gap-2 pt-1">
+              <div className="flex gap-2 pt-1 flex-wrap">
+                {isBacklog && (
+                  <button
+                    onClick={() => onStatusChange('active')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-colors"
+                    style={{ borderColor: 'color-mix(in srgb, var(--armada-primary) 30%, transparent)', color: 'var(--armada-primary)' }}
+                  >
+                    <Zap className="w-3 h-3" /> Activer
+                  </button>
+                )}
                 {objective.status === 'active' && (
                   <button
                     onClick={() => onStatusChange('completed')}
@@ -680,11 +1082,11 @@ function ObjectiveCard({
                     <CheckCircle2 className="w-3 h-3" /> Marquer terminé
                   </button>
                 )}
-                {objective.status !== 'active' && (
+                {!isBacklog && objective.status !== 'active' && (
                   <button
                     onClick={() => onStatusChange('active')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border border-[var(--armada-primary)]/30 hover:bg-[var(--armada-primary)]/10 transition-colors"
-                    style={{ color: 'var(--armada-primary)' }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-colors"
+                    style={{ borderColor: 'color-mix(in srgb, var(--armada-primary) 30%, transparent)', color: 'var(--armada-primary)' }}
                   >
                     <Zap className="w-3 h-3" /> Réactiver
                   </button>
@@ -849,7 +1251,8 @@ function DepartmentCard({ dept }: { dept: Department }) {
         </div>
         {dept.deployed ? (
           <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center gap-1 flex-shrink-0">
-            <CheckCircle2 className="w-3 h-3" /> Déployé
+            <CheckCircle2 className="w-3 h-3" />
+            {dept.coveredBy ? `Couvert par ${dept.coveredByName ?? dept.coveredBy}` : 'Déployé'}
           </span>
         ) : (
           <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--armada-text)]/5 text-[var(--armada-text)]/30 flex-shrink-0">

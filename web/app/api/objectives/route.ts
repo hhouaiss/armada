@@ -11,10 +11,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
 
+    // When filtering for 'active', include 'backlog' objectives too (not yet dispatched)
+    const statusFilter =
+      status === 'all' || !status
+        ? undefined
+        : status === 'active'
+          ? { in: ['active', 'backlog'] }
+          : { equals: status };
+
     const objectives = await prisma.objective.findMany({
       where: {
         storeId,
-        ...(status && status !== 'all' ? { status } : {}),
+        ...(statusFilter ? { status: statusFilter } : {}),
       },
       orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
       include: {
