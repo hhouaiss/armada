@@ -455,10 +455,27 @@ export class TelegramIntegration {
         sessionManager: this.sessionManager,
       };
 
+      // Load today's strategic plan from AutoDream if available
+      let planContext = '';
+      try {
+        const { MemoryEngine } = await import('../lib/memory-engine.js');
+        const engine = new MemoryEngine(storeId);
+        const today = new Date().toISOString().split('T')[0];
+        const plan = await engine.loadTopicFile(`plan_du_jour/${today}`).catch(() => null);
+        if (plan) {
+          planContext = `\n\nPLAN STRATÉGIQUE DU JOUR (généré cette nuit):\n${plan.slice(0, 2000)}`;
+        }
+      } catch { /* non-blocking */ }
+
       const briefingPrompt =
-        'C\'est le matin. Génère un briefing de démarrage de journée : ' +
-        'bilan de la nuit, métriques clés, 3 priorités du jour, ' +
-        'et une recommandation proactive. Sois concis et actionnable.';
+        'C\'est le matin. Génère un briefing de démarrage de journée. ' +
+        'Commence par lire les objectifs actifs (read_objectives), puis synthétise : ' +
+        '1) Bilan de la nuit et mémoire consolidée, ' +
+        '2) Plan stratégique du jour (tâches prioritaires par département), ' +
+        '3) Points d\'attention et alertes, ' +
+        '4) Une recommandation proactive. ' +
+        'Sois concis, structuré, et orienté action.' +
+        planContext;
 
       const response = await agent.chat(briefingPrompt, context, `user-${storeId}`);
 

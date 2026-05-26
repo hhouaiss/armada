@@ -3,10 +3,10 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Target, Plus, ChevronDown, ChevronRight, Trash2, Edit2,
+  Target, Plus, ChevronDown, ChevronRight, Trash2,
   CheckCircle2, AlertCircle, Clock, Pause, Loader2,
-  Flag, Calendar, MessageSquare, Bot, Zap, Shield,
-  X, Check, MoreHorizontal,
+  Calendar, Bot, Zap, Shield, Users,
+  X, Check, TrendingUp, DollarSign, Megaphone, Heart,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 
@@ -42,6 +42,16 @@ interface ApprovalRequest {
   riskLevel: 'low' | 'medium' | 'high' | 'critical';
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
+}
+
+interface Department {
+  type: string;
+  name: string;
+  designation: string;
+  role: string;
+  specialty: string;
+  capabilities: string[];
+  deployed: boolean;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -85,7 +95,9 @@ export default function ObjectivesPage() {
   const [loading, setLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
-  const [activeTab, setActiveTab] = useState<'objectives' | 'approvals'>('objectives');
+  const [activeTab, setActiveTab] = useState<'objectives' | 'approvals' | 'departments'>('objectives');
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [deploying, setDeploying] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'active' | 'all'>('active');
   const [saving, setSaving] = useState(false);
 
@@ -107,14 +119,17 @@ export default function ObjectivesPage() {
   async function loadAll() {
     setLoading(true);
     try {
-      const [objRes, appRes] = await Promise.all([
+      const [objRes, appRes, deptRes] = await Promise.all([
         fetch(`/api/objectives?storeId=${storeId}&status=${statusFilter}`),
         fetch(`/api/approvals?storeId=${storeId}&status=pending`),
+        fetch(`/api/agents/provision-departments?storeId=${storeId}`),
       ]);
       const objData = await objRes.json();
       const appData = await appRes.json();
+      const deptData = await deptRes.json();
       setObjectives(objData.objectives || []);
       setApprovals(appData.approvals || []);
+      setDepartments(deptData.departments || []);
       // Auto-expand high-priority active ones
       const highPrioIds = (objData.objectives || [])
         .filter((o: Objective) => o.priority === 3 && o.status === 'active')
@@ -124,6 +139,25 @@ export default function ObjectivesPage() {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deployAllDepartments() {
+    if (!storeId) return;
+    setDeploying(true);
+    try {
+      const res = await fetch('/api/agents/provision-departments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await loadAll();
+        alert(data.message + '\n\nRedémarrez le gateway pour activer les nouveaux agents.');
+      }
+    } finally {
+      setDeploying(false);
     }
   }
 
@@ -207,7 +241,7 @@ export default function ObjectivesPage() {
 
       {/* ── Tabs ───────────────────────────────────────────────────── */}
       <div className="flex gap-4 border-b border-[var(--armada-accent)]/30">
-        {(['objectives', 'approvals'] as const).map((tab) => (
+        {(['objectives', 'approvals', 'departments'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -220,12 +254,21 @@ export default function ObjectivesPage() {
           >
             {tab === 'objectives' ? (
               <><Target className="w-3.5 h-3.5" /> Objectifs ({objectives.length})</>
-            ) : (
+            ) : tab === 'approvals' ? (
               <>
                 <Shield className="w-3.5 h-3.5" /> Approbations
                 {pendingApprovals.length > 0 && (
                   <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold text-white bg-red-500">
                     {pendingApprovals.length}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <Users className="w-3.5 h-3.5" /> Départements
+                {departments.filter((d) => !d.deployed).length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold text-white" style={{ backgroundColor: 'var(--armada-primary)' }}>
+                    {departments.filter((d) => !d.deployed).length}
                   </span>
                 )}
               </>
@@ -446,6 +489,49 @@ export default function ObjectivesPage() {
               onDecide={(d) => decideApproval(approval.id, d)}
             />
           ))}
+        </div>
+      )}
+
+      {/* ── Departments Tab ──────────────────────────────────────────── */}
+      {!loading && activeTab === 'departments' && (
+        <div className="space-y-5">
+          {/* Info banner */}
+          <div
+            className="rounded-2xl border p-4 flex items-start gap-3"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--armada-primary) 5%, transparent)',
+              borderColor: 'color-mix(in srgb, var(--armada-primary) 30%, transparent)',
+            }}
+          >
+            <Zap className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--armada-primary)' }} />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-[var(--armada-text)] mb-0.5">
+                Nouveaux départements stratégiques
+              </p>
+              <p className="text-xs text-[var(--armada-text)]/50 leading-relaxed">
+                Déployez les 4 nouveaux départements pour couvrir toutes les fonctions business.
+                Après déploiement, redémarrez le gateway pour activer les agents.
+              </p>
+            </div>
+            {departments.some((d) => !d.deployed) && (
+              <button
+                onClick={deployAllDepartments}
+                disabled={deploying}
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-white text-xs font-medium flex-shrink-0 transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ backgroundColor: 'var(--armada-primary)' }}
+              >
+                {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                Tout déployer
+              </button>
+            )}
+          </div>
+
+          {/* Department cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {departments.map((dept) => (
+              <DepartmentCard key={dept.type} dept={dept} />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -716,5 +802,75 @@ function ApprovalCard({
         </span>
       </div>
     </motion.div>
+  );
+}
+
+// ─── DepartmentCard ───────────────────────────────────────────────────────────
+
+const DEPT_ICONS: Record<string, any> = {
+  growth:  TrendingUp,
+  finance: DollarSign,
+  ads:     Megaphone,
+  cx:      Heart,
+};
+
+const DEPT_COLORS: Record<string, string> = {
+  growth:  '#6366f1',
+  finance: '#10b981',
+  ads:     '#f59e0b',
+  cx:      '#ec4899',
+};
+
+function DepartmentCard({ dept }: { dept: Department }) {
+  const Icon = DEPT_ICONS[dept.type] ?? Bot;
+  const color = DEPT_COLORS[dept.type] ?? 'var(--armada-primary)';
+
+  return (
+    <div
+      className="rounded-2xl border p-4 space-y-3"
+      style={{
+        backgroundColor: 'var(--armada-card)',
+        borderColor: dept.deployed ? `${color}40` : 'var(--armada-accent)',
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ backgroundColor: `${color}18` }}
+        >
+          <Icon className="w-4 h-4" style={{ color }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-[var(--armada-text)]">{dept.name}</span>
+            <span className="text-xs text-[var(--armada-text)]/30 font-mono">{dept.designation}</span>
+          </div>
+          <p className="text-xs text-[var(--armada-text)]/50">{dept.role}</p>
+        </div>
+        {dept.deployed ? (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center gap-1 flex-shrink-0">
+            <CheckCircle2 className="w-3 h-3" /> Déployé
+          </span>
+        ) : (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--armada-text)]/5 text-[var(--armada-text)]/30 flex-shrink-0">
+            Non déployé
+          </span>
+        )}
+      </div>
+
+      <p className="text-xs text-[var(--armada-text)]/50 leading-relaxed">{dept.specialty}</p>
+
+      <div className="flex flex-wrap gap-1.5">
+        {dept.capabilities.map((cap) => (
+          <span
+            key={cap}
+            className="text-[10px] px-2 py-0.5 rounded-full font-mono"
+            style={{ backgroundColor: `${color}10`, color }}
+          >
+            {cap}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
