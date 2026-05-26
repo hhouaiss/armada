@@ -72,6 +72,12 @@ interface Plan {
   tasks: PlanTask[];
 }
 
+interface DispatchedAgent {
+  agentId: string;
+  agentName: string;
+  agentType: string;
+}
+
 interface PendingPlan {
   objectiveId: string;
   objectiveTitle: string;
@@ -151,6 +157,7 @@ export default function ObjectivesPage() {
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [dispatchedAgents, setDispatchedAgents] = useState<DispatchedAgent[]>([]);
 
   const [form, setForm] = useState({
     title: '',
@@ -291,13 +298,26 @@ export default function ObjectivesPage() {
   async function confirmPlan() {
     if (!pendingPlan || !storeId) return;
     setConfirming(true);
+    setDispatchedAgents([]);
     try {
-      await fetch(`/api/objectives/${pendingPlan.objectiveId}/dispatch`, {
+      const res = await fetch(`/api/objectives/${pendingPlan.objectiveId}/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ storeId, tasks: pendingPlan.plan.tasks }),
       });
-      setPendingPlan(null);
+      const data = await res.json();
+
+      // Show "agents working" state before closing the modal
+      if (data.agents?.length > 0) {
+        setDispatchedAgents(data.agents);
+        // Auto-dismiss after 6s so user can click on agent links
+        setTimeout(() => {
+          setPendingPlan(null);
+          setDispatchedAgents([]);
+        }, 8000);
+      } else {
+        setPendingPlan(null);
+      }
       await loadAll();
     } finally {
       setConfirming(false);
@@ -338,8 +358,8 @@ export default function ObjectivesPage() {
 
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
 
-  // Show plan modal when analyzing or plan is ready
-  const showPlanModal = analyzing || !!pendingPlan || !!analyzeError;
+  // Show plan modal when analyzing, plan is ready, or agents were dispatched
+  const showPlanModal = analyzing || !!pendingPlan || !!analyzeError || dispatchedAgents.length > 0;
 
   return (
     <div
@@ -354,10 +374,12 @@ export default function ObjectivesPage() {
             plan={pendingPlan}
             error={analyzeError}
             confirming={confirming}
+            dispatchedAgents={dispatchedAgents}
             onConfirm={confirmPlan}
             onDismiss={() => {
               setPendingPlan(null);
               setAnalyzeError(null);
+              setDispatchedAgents([]);
             }}
           />
         )}
@@ -701,6 +723,7 @@ function PlanModal({
   plan,
   error,
   confirming,
+  dispatchedAgents,
   onConfirm,
   onDismiss,
 }: {
@@ -708,9 +731,11 @@ function PlanModal({
   plan: PendingPlan | null;
   error: string | null;
   confirming: boolean;
+  dispatchedAgents: DispatchedAgent[];
   onConfirm: () => void;
   onDismiss: () => void;
 }) {
+  const isDispatched = dispatchedAgents.length > 0 && !plan;
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -735,14 +760,24 @@ function PlanModal({
           <div className="flex items-center gap-2.5">
             <div
               className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 15%, transparent)' }}
+              style={{ backgroundColor: isDispatched ? 'rgba(16,185,129,0.15)' : 'color-mix(in srgb, var(--armada-primary) 15%, transparent)' }}
             >
-              <Bot className="w-4 h-4" style={{ color: 'var(--armada-primary)' }} />
+              {isDispatched
+                ? <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                : <Bot className="w-4 h-4" style={{ color: 'var(--armada-primary)' }} />
+              }
             </div>
             <div>
-              <p className="text-sm font-semibold text-[var(--armada-text)]">The Major — Plan d'action</p>
+              <p className="text-sm font-semibold text-[var(--armada-text)]">
+                {isDispatched ? 'Équipe déployée — tâches en cours' : 'The Major — Plan d\'action'}
+              </p>
               {plan && (
                 <p className="text-xs text-[var(--armada-text)]/40 truncate max-w-xs">{plan.objectiveTitle}</p>
+              )}
+              {isDispatched && (
+                <p className="text-xs text-emerald-400/70">
+                  Les agents travaillent • Résultats visibles dans leurs chats
+                </p>
               )}
             </div>
           </div>
@@ -758,6 +793,61 @@ function PlanModal({
 
         {/* Modal Body */}
         <div className="p-5 max-h-[65vh] overflow-y-auto space-y-4">
+          {/* Dispatched state — agents are now working */}
+          {isDispatched && (
+            <div className="space-y-4">
+              <div
+                className="rounded-xl p-4 border border-emerald-500/20 bg-emerald-500/5 flex items-start gap-3"
+              >
+                <Zap className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-emerald-400">
+                    {dispatchedAgents.length} agent{dispatchedAgents.length > 1 ? 's' : ''} en cours d'exécution
+                  </p>
+                  <p className="text-xs text-[var(--armada-text)]/40 mt-0.5 leading-relaxed">
+                    Chaque agent analyse et exécute sa tâche maintenant. Les résultats apparaissent
+                    dans leurs conversations au fil des secondes.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-[var(--armada-text)]/30 uppercase tracking-wider">
+                  Accéder aux conversations
+                </p>
+                {dispatchedAgents.map((a) => {
+                  const deptKey = agentDeptKey(a.agentType);
+                  const Icon = AGENT_DEPT_ICON[deptKey] ?? Bot;
+                  const color = AGENT_DEPT_COLOR[deptKey] ?? 'var(--armada-primary)';
+                  return (
+                    <a
+                      key={a.agentId}
+                      href={`/hq?agent=${a.agentId}`}
+                      onClick={onDismiss}
+                      className="flex items-center gap-3 rounded-xl px-4 py-3 border transition-all hover:bg-white/[0.03] group"
+                      style={{ backgroundColor: 'var(--armada-bg)', borderColor: `${color}25` }}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: `${color}15` }}
+                      >
+                        <Icon className="w-4 h-4" style={{ color }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-[var(--armada-text)]">{a.agentName}</p>
+                        <p className="text-xs text-[var(--armada-text)]/30 flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          En train de travailler…
+                        </p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[var(--armada-text)]/20 group-hover:text-[var(--armada-text)]/50 transition-colors" />
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Analyzing state */}
           {analyzing && !plan && !error && (
             <div className="flex flex-col items-center justify-center py-12 gap-4">
@@ -897,12 +987,12 @@ function PlanModal({
             <button
               onClick={onDismiss}
               className="px-4 py-2 rounded-full text-sm border hover:border-[var(--armada-text)]/40 transition-all"
-              style={{ borderColor: 'var(--armada-accent)', color: 'var(--armada-text)/50' }}
+              style={{ borderColor: 'var(--armada-accent)', color: 'var(--armada-text)' }}
             >
-              {plan ? 'Plus tard' : 'Fermer'}
+              {isDispatched ? 'Fermer' : plan ? 'Plus tard' : 'Fermer'}
             </button>
 
-            {plan && (
+            {plan && !isDispatched && (
               <button
                 onClick={onConfirm}
                 disabled={confirming}
@@ -910,14 +1000,17 @@ function PlanModal({
                 style={{ backgroundColor: 'var(--armada-primary)' }}
               >
                 {confirming ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Lancement en cours…</>
                 ) : (
-                  <SendHorizonal className="w-4 h-4" />
+                  <><SendHorizonal className="w-4 h-4" /> Lancer {plan.plan.tasks.length} tâche{plan.plan.tasks.length > 1 ? 's' : ''}</>
                 )}
-                {confirming
-                  ? 'Dispatch en cours…'
-                  : `Confirmer & Lancer ${plan.plan.tasks.length} tâche${plan.plan.tasks.length > 1 ? 's' : ''}`}
               </button>
+            )}
+
+            {isDispatched && (
+              <span className="text-xs text-[var(--armada-text)]/30">
+                Fermeture automatique dans quelques secondes…
+              </span>
             )}
           </div>
         )}

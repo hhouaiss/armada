@@ -669,6 +669,106 @@ Règles :
       return;
     }
 
+    // ── Execute objective plan: POST /api/objectives/execute-plan ────────────
+    // Triggers each agent immediately and saves results to ChatMessage table.
+    // Responds 202 instantly; execution runs in background.
+    if (method === 'POST' && url === '/api/objectives/execute-plan') {
+      try {
+        const body = await this.readBody(req);
+        const { storeId, objectiveId, objectiveTitle, tasks } = JSON.parse(body) as {
+          storeId: string;
+          objectiveId: string;
+          objectiveTitle: string;
+          tasks: Array<{ agentType: string; agentName: string; task: string }>;
+        };
+
+        if (!storeId || !Array.isArray(tasks) || tasks.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'storeId and tasks[] are required' }));
+          return;
+        }
+
+        // Respond immediately — execution is async
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, message: `Executing ${tasks.length} tasks in background` }));
+
+        // Execute in background (don't block the response)
+        (async () => {
+          try {
+            const store = await getStoreCredentials(storeId);
+            const accessToken = decryptToken(store.accessToken);
+            const storeAgents = this.router.getAgentsByStore(storeId);
+
+            console.log(`\n🚀 Mission Control: executing ${tasks.length} tasks for objective "${objectiveTitle}"`);
+
+            // Run all agents in parallel (settled so one failure doesn't block others)
+            const results = await Promise.allSettled(
+              tasks.map(async (t) => {
+                // Find agent by type
+                const agent = storeAgents.find((a) => a.config.type === t.agentType);
+                if (!agent) {
+                  console.warn(`  ⚠️  Agent type "${t.agentType}" not found in router — skipping`);
+                  return { agentName: t.agentName, skipped: true };
+                }
+
+                const operationId = `mc-${objectiveId}-${t.agentType}-${Date.now()}`;
+                const conversationId = `mission-${objectiveId}`;
+
+                const context = {
+                  storeId,
+                  shopifyAccessToken: accessToken,
+                  shopifyDomain: store.shopifyDomain,
+                  agentId: agent.config.id,
+                  operationId,
+                  router: this.router,
+                  toolRegistry: this.toolRegistry,
+                  sessionManager: this.sessionManager,
+                };
+
+                // Build the task message with objective context
+                const taskMessage = `[Mission Control — Objectif: ${objectiveTitle}]\n\n${t.task}\n\nExécute cette tâche maintenant et fournis un rapport de ce que tu as fait et les résultats obtenus.`;
+
+                // Save user-side message (the task)
+                await saveChatMessage({
+                  storeId,
+                  agentId: agent.config.id,
+                  sender: 'user',
+                  content: taskMessage,
+                });
+
+                console.log(`  → Calling ${t.agentName} (${t.agentType})...`);
+                const response = await agent.chat(taskMessage, context, conversationId);
+
+                // Save agent response
+                await saveChatMessage({
+                  storeId,
+                  agentId: agent.config.id,
+                  sender: 'agent',
+                  content: response,
+                });
+
+                console.log(`  ✓ ${t.agentName} completed task`);
+                return { agentName: t.agentName, done: true };
+              })
+            );
+
+            const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+            const failed = results.filter((r) => r.status === 'rejected').length;
+            console.log(`\n✅ Mission Control: ${succeeded}/${tasks.length} tasks executed${failed > 0 ? `, ${failed} failed` : ''}\n`);
+
+          } catch (error) {
+            console.error('Mission Control execution error:', error);
+          }
+        })();
+
+      } catch (error) {
+        console.error('Error starting plan execution:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to start execution' }));
+      }
+      return;
+    }
+
     // ── Inbox dispatch: POST /api/inbox/dispatch ────────────────────────────
     if (method === 'POST' && url === '/api/inbox/dispatch') {
       try {

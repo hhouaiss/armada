@@ -1,9 +1,13 @@
 /**
  * POST /api/objectives/[id]/dispatch
  *
- * Confirms a plan and dispatches tasks to agent inboxes.
+ * Confirms a plan and immediately triggers agent execution.
  * 1. Creates Project records in DB (one per task)
- * 2. Pushes tasks to agent inboxes via gateway /api/inbox/dispatch
+ * 2. Activates the objective (backlog → active)
+ * 3. Triggers gateway to execute each agent's task NOW (saves results to ChatMessage)
+ * 4. Also writes to agent inboxes for future reference
+ *
+ * Returns which agents were triggered so the UI can link to their chats.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -41,16 +45,15 @@ export async function POST(
     return NextResponse.json({ error: 'Objective not found' }, { status: 404 });
   }
 
-  // 1. Find agent IDs for each task
+  // 1. Find agent DB records (for project ownerAgentId)
   const agentTypes = tasks.map((t) => t.agentType);
   const agents = await prisma.agent.findMany({
     where: { storeId, type: { in: agentTypes }, isActive: true },
     select: { id: true, type: true, name: true },
   });
-
   const agentByType = new Map(agents.map((a) => [a.type, a]));
 
-  // 2. Create Project records
+  // 2. Create Project records (one per task)
   const projects = await Promise.all(
     tasks.map(async (t) => {
       const agent = agentByType.get(t.agentType);
@@ -67,7 +70,7 @@ export async function POST(
     })
   );
 
-  // 3. Update objective status to 'active' if it was in backlog
+  // 3. Activate objective if it was in backlog
   if (objective.status === 'backlog') {
     await prisma.objective.update({
       where: { id },
@@ -75,10 +78,35 @@ export async function POST(
     });
   }
 
-  // 4. Dispatch to agent inboxes via gateway
-  let dispatched = 0;
+  // 4. Trigger actual agent execution in the gateway (fire & forget — 202)
+  //    Each agent will chat(), use tools, and save results to ChatMessage table.
+  let executionTriggered = false;
   try {
-    const inboxRes = await fetch(`${GATEWAY_HTTP_URL}/api/inbox/dispatch`, {
+    const execRes = await fetch(`${GATEWAY_HTTP_URL}/api/objectives/execute-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storeId,
+        objectiveId: id,
+        objectiveTitle: objective.title,
+        tasks: tasks.map((t) => ({
+          agentType: t.agentType,
+          agentName: t.agentName,
+          task: t.task,
+        })),
+      }),
+      signal: AbortSignal.timeout(8_000), // just checking the 202 arrives
+    });
+    executionTriggered = execRes.status === 202 || execRes.ok;
+  } catch (error) {
+    // Gateway offline — tasks will execute next time agents chat or at AutoDream
+    console.warn('Gateway offline — execution deferred:', error);
+    executionTriggered = false;
+  }
+
+  // 5. Also write to inboxes for future reference / sessions
+  try {
+    await fetch(`${GATEWAY_HTTP_URL}/api/inbox/dispatch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -89,23 +117,27 @@ export async function POST(
           from: 'Mission Control',
         })),
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(8_000),
     });
-
-    if (inboxRes.ok) {
-      const inboxData = await inboxRes.json();
-      dispatched = inboxData.dispatched ?? tasks.length;
-    }
-  } catch (error) {
-    console.error('Inbox dispatch warning (non-fatal):', error);
-    // Non-fatal — projects are created, tasks go to inbox when gateway is reachable
-    dispatched = 0;
+  } catch {
+    // Non-fatal
   }
+
+  // Return agent chat links so the UI can surface them
+  const agentLinks = tasks.map((t) => {
+    const agent = agentByType.get(t.agentType);
+    return {
+      agentId: agent?.id ?? null,
+      agentName: t.agentName,
+      agentType: t.agentType,
+    };
+  }).filter((a) => a.agentId !== null);
 
   return NextResponse.json({
     success: true,
     projectsCreated: projects.length,
-    dispatched,
+    executionTriggered,
     objectiveActivated: objective.status === 'backlog',
+    agents: agentLinks,
   });
 }
