@@ -49,9 +49,75 @@ model Store {
   routingRules          RoutingRule[]
   livrables             Livrable[]
   agentMemory           AgentMemory[]
+  objectives            Objective[]
+  projects              Project[]
+  approvalRequests      ApprovalRequest[]
 
   @@index([userId])
   @@map("stores")
+}
+
+// Objectives — Strategic goals hierarchy
+model Objective {
+  id          String    @id @default(cuid())
+  storeId     String
+  title       String
+  description String?   @db.Text
+  type        String    @default("quarterly")
+  priority    Int       @default(2)
+  status      String    @default("active")
+  dueDate     DateTime?
+  notes       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  projects    Project[]
+
+  @@index([storeId])
+  @@index([storeId, status])
+  @@map("objectives")
+}
+
+model Project {
+  id           String    @id @default(cuid())
+  objectiveId  String
+  storeId      String
+  title        String
+  description  String?   @db.Text
+  ownerAgentId String?
+  status       String    @default("active")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  objective    Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([objectiveId])
+  @@index([storeId])
+  @@map("projects")
+}
+
+model ApprovalRequest {
+  id          String    @id @default(cuid())
+  storeId     String
+  agentId     String?
+  agentName   String?
+  action      String
+  description String    @db.Text
+  payload     Json
+  riskLevel   String    @default("medium")
+  status      String    @default("pending")
+  decidedBy   String?
+  decidedAt   DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+  @@map("approval_requests")
 }
 
 model Agent {

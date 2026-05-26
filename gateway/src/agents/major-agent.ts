@@ -30,7 +30,48 @@ export class MajorAgent extends BaseAgent {
    */
   protected async getAdditionalSystemContext(conversationId: string): Promise<string> {
     try {
-      // ── 1. Inject live squad roster (always up-to-date from DB) ──────────────
+      // ── 1. Inject active objectives from Mission Control ──────────────────────
+      const objectives = await prisma.objective.findMany({
+        where: { storeId: this.config.storeId!, status: 'active' },
+        orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+        include: { projects: { where: { status: 'active' } } },
+      }).catch(() => [] as any[]);
+
+      const objectiveLines: string[] = ['\n\n## MISSION CONTROL — ACTIVE OBJECTIVES'];
+      if (objectives.length === 0) {
+        objectiveLines.push('No active objectives set yet. Ask the owner to add objectives in Mission Control (/objectives).');
+      } else {
+        objectiveLines.push('These are the owner\'s current strategic priorities. Align ALL your actions and dispatches to serve these objectives.\n');
+        const priorityLabel: Record<number, string> = { 1: 'LOW', 2: 'MEDIUM', 3: 'HIGH' };
+        for (const obj of objectives) {
+          objectiveLines.push(`### [${priorityLabel[obj.priority] ?? 'MEDIUM'}] ${obj.title} (${obj.type})`);
+          if (obj.description) objectiveLines.push(`  Context: ${obj.description}`);
+          if (obj.notes) objectiveLines.push(`  Instructions: ${obj.notes}`);
+          if (obj.dueDate) objectiveLines.push(`  Due: ${new Date(obj.dueDate).toLocaleDateString('fr-FR')}`);
+          if (obj.projects.length > 0) {
+            objectiveLines.push(`  Active projects: ${obj.projects.map((p: any) => p.title).join(', ')}`);
+          } else {
+            objectiveLines.push(`  ⚡ No projects yet — decompose this objective into tasks and dispatch.`);
+          }
+        }
+      }
+
+      // ── 2. Inject pending approvals ───────────────────────────────────────────
+      const pendingApprovals = await prisma.approvalRequest.findMany({
+        where: { storeId: this.config.storeId!, status: 'pending' },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }).catch(() => [] as any[]);
+
+      if (pendingApprovals.length > 0) {
+        objectiveLines.push(`\n## PENDING APPROVALS (${pendingApprovals.length})`);
+        objectiveLines.push('These actions are waiting for human approval:');
+        for (const a of pendingApprovals) {
+          objectiveLines.push(`- [${a.riskLevel.toUpperCase()}] ${a.action}: ${a.description.slice(0, 100)}...`);
+        }
+      }
+
+      // ── 3. Inject live squad roster (always up-to-date from DB) ──────────────
       const activeAgents = await prisma.agent.findMany({
         where: { storeId: this.config.storeId, isActive: true, NOT: { type: 'major' } },
         select: { id: true, name: true, type: true, personality: true, capabilities: true },
@@ -47,10 +88,10 @@ export class MajorAgent extends BaseAgent {
         rosterLines.push('- No specialists registered yet. Use manage_agents to create your team.');
       }
 
-      // ── 2. Inject recent conversations from specialists ───────────────────────
+      // ── 4. Inject recent conversations from specialists ───────────────────────
       const sessions = await loadSessionsForConversation(conversationId, this.config.id);
 
-      const lines: string[] = [...rosterLines];
+      const lines: string[] = [...objectiveLines, ...rosterLines];
 
       if (sessions.length === 0) return lines.join('\n');
 
@@ -118,9 +159,38 @@ Usage: provide an endpoint (e.g. "/api/campaigns/"), a method (GET/POST/PATCH/DE
 
 For marketing tasks, dispatch to a marketing specialist (e.g. Zoe). If none exists yet, create one with \`manage_agents\` and grant capabilities: "marketing". That single capability gives them full Klaviyo access.
 
+## MISSION CONTROL — YOUR STRATEGIC COMPASS
+At the start of EVERY session, read the active objectives injected in your system context (MISSION CONTROL section above). These are the owner's strategic priorities.
+
+- **Align every action** to serve the active objectives. When completing a task, explicitly link it to the relevant objective.
+- **Proactively decompose** objectives without projects into concrete tasks and dispatch them to the right specialists.
+- **Morning ritual**: Each morning briefing should start with objective progress — what was accomplished yesterday toward each goal, and what's the plan for today.
+- **If no objectives exist**, ask the owner to set them in Mission Control (/objectives). Explain that this is how they pilot the team.
+
+## WEB BROWSING & STOREFRONT ACCESS
+You now have full web access via \`web_browse\`:
+- **Find any product by URL**: use \`product_get_by_handle\` with the handle from the URL (e.g., "mon-produit" from /products/mon-produit)
+- **Build storefront URLs**: use \`storefront_url\` to get the public link for any product, collection, page, or blog post
+- **Inspect the store live**: use \`web_browse\` with the storefront URL to see exactly what customers see
+- **Check navigation**: use \`navigation_get\` to see all menus and links
+- **Fix broken links**: use \`redirect_create\` to set up redirects
+- **Update SEO**: use \`product_update_metafields\` for title_tag, description_tag on any product
+
+## HUMAN APPROVAL — WHEN TO ASK
+Use \`request_approval\` BEFORE executing any action with significant business impact:
+- Launching a marketing campaign (email, SMS)
+- Modifying product prices
+- Bulk inventory changes
+- Deleting content
+- Any action the owner hasn't explicitly asked for in this session
+
+For actions the owner explicitly requested in the same message → execute directly (no approval needed).
+For autonomous proactive actions → always request approval first.
+
 ## HOW YOU OPERATE
-1. **Assess** — Understand what the user needs. Break complex requests into sub-tasks.
-2. **Dispatch** — Use the right dispatch tool:
+1. **Check objectives** — Read Mission Control context. What objectives need work today?
+2. **Assess** — Understand what the user needs. Break complex requests into sub-tasks.
+3. **Dispatch** — Use the right dispatch tool:
    - \`dispatch_to_specialist\` — for a **single specialist** or when tasks must run **sequentially** (output of A feeds into B).
    - \`parallel_dispatch\` — when the user asks about **multiple independent domains at once** (e.g. "sales AND inventory?", "products AND SEO status?"). All specialists run simultaneously — 2-3× faster.
 3. **Synthesise** — Combine the specialists' results into a clear, actionable response for the user.
@@ -141,10 +211,11 @@ For marketing tasks, dispatch to a marketing specialist (e.g. Zoe). If none exis
 
 ### CAPABILITIES ARE OPEN-ENDED
 The "capabilities" field is a comma-separated list of tool category names — not a fixed enum. Any category that exists in the tool registry is valid. You are NOT limited to Shopify scopes. Examples:
-- Shopify: products, inventory, customers, orders, collections, content, store
-- SEO: seo
+- Shopify core: products, inventory, customers, orders, collections, content, store
+- SEO & web: seo, web (web_browse, navigation_get, storefront_url, redirect_create, product_get_by_handle)
 - Email/SMS marketing (Klaviyo): marketing
-- Future integrations (Stripe, CRM, etc.) will have their own category names
+- Orchestration (Major only): orchestration (dispatch, manage_agents, read_objectives, request_approval)
+- Future integrations (Stripe, CRM, Meta Ads, Google Ads, etc.) will have their own category names
 
 When creating or updating an agent, always grant the categories that match the tools they need. For a Klaviyo marketing specialist, use capabilities: "marketing". You can combine categories: "marketing, customers, store".
 

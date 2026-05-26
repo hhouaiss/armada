@@ -712,6 +712,95 @@ export class ShopifyClient {
 
   // ── Shop ───────────────────────────────────────────────────────────────────
 
+  // ── Product by handle ──────────────────────────────────────────────────────
+
+  async getProductByHandle(handle: string) {
+    const data = await this.query(
+      `query GetProductByHandle($handle: String!) {
+        productByHandle(handle: $handle) {
+          id title bodyHtml vendor status handle
+          onlineStoreUrl
+          variants(first: 10) {
+            edges { node { id title price inventoryQuantity inventoryItem { id } } }
+          }
+          seo { title description }
+        }
+      }`,
+      { handle }
+    );
+    if (!data.productByHandle) return { product: null };
+    const p = data.productByHandle;
+    return {
+      product: {
+        ...flattenProduct(p),
+        handle: p.handle,
+        online_store_url: p.onlineStoreUrl,
+        seo: p.seo,
+      },
+    };
+  }
+
+  // ── Metafields ─────────────────────────────────────────────────────────────
+
+  async setProductMetafields(productId: string, metafields: Array<{ namespace: string; key: string; value: string; type: string }>) {
+    const data = await this.query(
+      `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id namespace key value }
+          userErrors { field message }
+        }
+      }`,
+      {
+        metafields: metafields.map((m) => ({
+          ownerId: toGid('Product', productId),
+          namespace: m.namespace,
+          key: m.key,
+          value: m.value,
+          type: m.type,
+        })),
+      }
+    );
+    throwUserErrors(data.metafieldsSet.userErrors);
+    return { metafields: data.metafieldsSet.metafields };
+  }
+
+  // ── URL Redirects ──────────────────────────────────────────────────────────
+
+  async createRedirect(path: string, target: string) {
+    const data = await this.query(
+      `mutation UrlRedirectCreate($urlRedirect: UrlRedirectInput!) {
+        urlRedirectCreate(urlRedirect: $urlRedirect) {
+          urlRedirect { id path target }
+          userErrors { field message }
+        }
+      }`,
+      { urlRedirect: { path, target } }
+    );
+    throwUserErrors(data.urlRedirectCreate.userErrors);
+    return { redirect: data.urlRedirectCreate.urlRedirect };
+  }
+
+  // ── Navigation menus ───────────────────────────────────────────────────────
+
+  async getMenus() {
+    const data = await this.query(
+      `query GetMenus {
+        menus(first: 20) {
+          edges { node {
+            id title handle
+            items {
+              id title url type
+              items {
+                id title url type
+              }
+            }
+          }}
+        }
+      }`
+    );
+    return { menus: edges(data.menus) };
+  }
+
   async getShopInfo() {
     const data = await this.query(
       `query GetShop {

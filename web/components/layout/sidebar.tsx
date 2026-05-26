@@ -13,6 +13,7 @@ import {
   Puzzle,
   Menu,
   X,
+  Target,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
@@ -24,6 +25,7 @@ const navGroups = [
     label: 'Opérations',
     items: [
       { name: 'Quartier Général', href: '/hq', icon: LayoutDashboard },
+      { name: 'Mission Control', href: '/objectives', icon: Target },
       { name: 'Livrables', href: '/livrables', icon: Inbox },
     ],
   },

@@ -49,6 +49,9 @@ model Store {
   routingRules          RoutingRule[]
   livrables             Livrable[]
   agentMemory           AgentMemory[]
+  objectives            Objective[]
+  projects              Project[]
+  approvalRequests      ApprovalRequest[]
 
   @@index([userId])
   @@map("stores")
@@ -339,6 +342,71 @@ model AgentMemory {
   @@unique([storeId, type, key])
   @@index([storeId])
   @@map("agent_memory")
+}
+
+// Objectives — Strategic goals hierarchy (mission → quarterly → weekly)
+model Objective {
+  id          String    @id @default(cuid())
+  storeId     String
+  title       String
+  description String?   @db.Text
+  type        String    @default("quarterly") // 'mission' | 'quarterly' | 'weekly' | 'onetime'
+  priority    Int       @default(2)           // 1=low, 2=medium, 3=high
+  status      String    @default("active")    // 'active' | 'completed' | 'archived' | 'blocked'
+  dueDate     DateTime?
+  notes       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  projects    Project[]
+
+  @@index([storeId])
+  @@index([storeId, status])
+  @@map("objectives")
+}
+
+// Projects — sub-tasks dispatched from objectives to agents
+model Project {
+  id           String    @id @default(cuid())
+  objectiveId  String
+  storeId      String
+  title        String
+  description  String?   @db.Text
+  ownerAgentId String?   // Agent responsible for this project
+  status       String    @default("active") // 'active' | 'completed' | 'blocked' | 'paused'
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  objective    Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([objectiveId])
+  @@index([storeId])
+  @@map("projects")
+}
+
+// ApprovalRequest — human-in-the-loop gate for high-risk agent actions
+model ApprovalRequest {
+  id          String    @id @default(cuid())
+  storeId     String
+  agentId     String?
+  agentName   String?
+  action      String                         // Tool/action name requiring approval
+  description String    @db.Text             // Human-readable explanation with impact
+  payload     Json                           // Exact params to execute when approved
+  riskLevel   String    @default("medium")   // 'low' | 'medium' | 'high' | 'critical'
+  status      String    @default("pending")  // 'pending' | 'approved' | 'rejected' | 'expired'
+  decidedBy   String?
+  decidedAt   DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+  @@map("approval_requests")
 }
 
 // Many-to-many relation between Agents and Skills

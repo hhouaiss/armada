@@ -16,6 +16,13 @@ import {
   updateProductTool,
 } from './tools/shopify/products.js';
 import {
+  getProductByHandleTool,
+  updateProductMetafieldsTool,
+  createRedirectTool,
+  storefrontUrlTool,
+  getNavigationTool,
+} from './tools/shopify/enhanced.js';
+import {
   getInventoryTool,
   updateInventoryTool,
   getLowStockTool,
@@ -53,6 +60,9 @@ import { notionTools } from './tools/notion.js';
 import { inboxCompleteTool } from './tools/inbox.js';
 import { checkDreamSchedule } from './workers/auto-dream.js';
 import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
+import { webBrowseTool } from './tools/web-browse.js';
+import { readObjectivesTool } from './tools/read-objectives.js';
+import { requestApprovalTool, setApprovalTelegramNotifier } from './tools/request-approval.js';
 
 // Load environment variables
 config();
@@ -77,6 +87,13 @@ async function bootstrap() {
   toolRegistry.register(listProductsTool);
   toolRegistry.register(createProductTool);
   toolRegistry.register(updateProductTool);
+
+  // Enhanced Shopify tools (Sprint 2 — web navigation, handles, redirects, metafields)
+  toolRegistry.register(getProductByHandleTool);
+  toolRegistry.register(updateProductMetafieldsTool);
+  toolRegistry.register(createRedirectTool);
+  toolRegistry.register(storefrontUrlTool);
+  toolRegistry.register(getNavigationTool);
 
   // Register inventory tools
   toolRegistry.register(getInventoryTool);
@@ -130,6 +147,15 @@ async function bootstrap() {
   for (const tool of notionTools) {
     toolRegistry.register(tool);
   }
+
+  // Web browsing (agents can read any URL)
+  toolRegistry.register(webBrowseTool);
+
+  // Mission Control — read strategic objectives
+  toolRegistry.register(readObjectivesTool);
+
+  // Human-in-the-loop approval gate
+  toolRegistry.register(requestApprovalTool);
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 
@@ -192,6 +218,11 @@ async function bootstrap() {
     // Wire KAIROS → Telegram alerts
     setTelegramNotifier((storeId, text, hasActionButtons) =>
       telegram!.sendAlert(storeId, text, hasActionButtons)
+    );
+
+    // Wire approval requests → Telegram notifications
+    setApprovalTelegramNotifier((storeId, text, hasButtons) =>
+      telegram!.sendAlert(storeId, text, hasButtons)
     );
     console.log('✓ Telegram bot connected\n');
   } else {
