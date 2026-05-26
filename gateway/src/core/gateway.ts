@@ -729,7 +729,8 @@ Règles :
                 }
 
                 const operationId = `mc-${objectiveId}-${t.agentType}-${Date.now()}`;
-                const conversationId = `mission-${objectiveId}`;
+                // Use the agent's stable main thread — same as the chat drawer and chat page
+                const conversationId = `agent-${agent.config.id}`;
 
                 const context = {
                   storeId,

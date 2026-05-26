@@ -84,7 +84,10 @@ export function AgentChatDrawer() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<string>(() => `conv-${Date.now()}`);
+  // Stable per-agent conversation thread — shared with Mission Control and chat page
+  const [conversationId, setConversationId] = useState<string>(() =>
+    agentId ? `agent-${agentId}` : `conv-${Date.now()}`
+  );
   const [conversations, setConversations] = useState<Array<{ id: string; label: string }>>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -103,6 +106,11 @@ export function AgentChatDrawer() {
     greeting: 'Bonjour ! Comment puis-je vous aider ?',
   };
   greetingRef.current = personality.greeting;
+
+  // When switching to a different agent, reset to that agent's primary thread
+  useEffect(() => {
+    if (agentId) setConversationId(`agent-${agentId}`);
+  }, [agentId]);
 
   // Load history when agentId or conversationId changes
   useEffect(() => {
@@ -142,14 +150,26 @@ export function AgentChatDrawer() {
 
   const startNewConversation = useCallback(() => {
     const newId = `conv-${Date.now()}`;
+    // Archive the current thread (main or previous new conversation)
+    const currentLabel = conversationId.startsWith('agent-')
+      ? 'Fil principal'
+      : `Conversation archivée`;
     setConversations(prev => [
-      { id: conversationId, label: `Conversation ${prev.length + 1}` },
+      { id: conversationId, label: currentLabel },
       ...prev,
     ]);
     setConversationId(newId);
     setMessages([{ id: 'welcome', sender: 'agent', content: greetingRef.current, timestamp: new Date(), status: 'sent' }]);
     setInput('');
   }, [conversationId]);
+
+  // Return to the agent's main persistent thread
+  const returnToMainThread = useCallback(() => {
+    if (!agentId) return;
+    setConversations([]);
+    setConversationId(`agent-${agentId}`);
+    setInput('');
+  }, [agentId]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -243,23 +263,30 @@ export function AgentChatDrawer() {
           </button>
         </div>
 
-        {/* ── Past conversations (if any) ── */}
+        {/* ── Thread switcher ── */}
         {conversations.length > 0 && (
           <div
             className="flex gap-2 px-4 py-2 border-b border-[var(--armada-accent)]/30 overflow-x-auto shrink-0"
             style={{ backgroundColor: 'var(--armada-surface)' }}
           >
+            {/* Current thread indicator */}
             <button
-              onClick={() => {
-                setConversationId(`conv-${Date.now()}`);
-                setMessages([{ id: 'welcome', sender: 'agent', content: greetingRef.current, timestamp: new Date(), status: 'sent' }]);
-              }}
               className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono whitespace-nowrap border border-[var(--armada-primary)]/40 text-[var(--armada-primary)]"
             >
               <MessageSquare className="h-2.5 w-2.5" />
-              En cours
+              {conversationId.startsWith('agent-') ? 'Fil principal' : 'En cours'}
             </button>
-            {conversations.slice(0, 5).map(conv => (
+            {/* Back to main thread (if in a side conversation) */}
+            {!conversationId.startsWith('agent-') && agentId && (
+              <button
+                onClick={returnToMainThread}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono whitespace-nowrap border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+              >
+                ↩ Fil principal
+              </button>
+            )}
+            {/* Past threads */}
+            {conversations.slice(0, 4).map(conv => (
               <button
                 key={conv.id}
                 onClick={() => setConversationId(conv.id)}

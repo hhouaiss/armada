@@ -183,7 +183,8 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(agentId, input, `user-${activeStoreId}`);
+      // Use the stable per-agent thread — same ID used by Mission Control and the drawer
+      const response = await sendChatMessage(agentId, input, `agent-${agentId}`);
       setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, status: 'sent' as const } : m));
       setMessages(prev => [...prev, {
         id: `agent-${Date.now()}`,
