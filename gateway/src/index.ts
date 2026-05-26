@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { Gateway } from './core/gateway.js';
+import { Gateway, setMissionTelegramNotifier } from './core/gateway.js';
 import { Router } from './core/router.js';
 import { SessionManager } from './core/session-manager.js';
 import { ToolRegistry } from './core/tool-registry.js';
@@ -223,6 +223,11 @@ async function bootstrap() {
     // Wire approval requests → Telegram notifications
     setApprovalTelegramNotifier((storeId, text, hasButtons) =>
       telegram!.sendAlert(storeId, text, hasButtons)
+    );
+
+    // Wire Mission Control task completion → Telegram notifications
+    setMissionTelegramNotifier((storeId, text) =>
+      telegram!.sendAlert(storeId, text, false)
     );
     console.log('✓ Telegram bot connected\n');
   } else {

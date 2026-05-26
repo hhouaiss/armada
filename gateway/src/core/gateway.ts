@@ -19,6 +19,13 @@ import { runKairosTick, setKairosEnabled, setKairosThresholds } from '../workers
 import { MemoryEngine } from '../lib/memory-engine.js';
 import { createLLMProvider } from '../lib/llm/provider-factory.js';
 
+// ── Mission completion Telegram notifier (wired from index.ts after telegram init) ──
+type AlertFn = (storeId: string, text: string, hasButtons?: boolean) => Promise<void>;
+let missionTelegramNotifier: AlertFn | null = null;
+export function setMissionTelegramNotifier(fn: AlertFn): void {
+  missionTelegramNotifier = fn;
+}
+
 interface Connection {
   id: string;
   ws: WebSocket;
@@ -701,14 +708,24 @@ Règles :
 
             console.log(`\n🚀 Mission Control: executing ${tasks.length} tasks for objective "${objectiveTitle}"`);
 
+            interface TaskResult {
+              agentName: string;
+              agentType: string;
+              skipped?: boolean;
+              done?: boolean;
+              failed?: boolean;
+              response?: string;
+              error?: string;
+            }
+
             // Run all agents in parallel (settled so one failure doesn't block others)
-            const results = await Promise.allSettled(
-              tasks.map(async (t) => {
+            const settled = await Promise.allSettled(
+              tasks.map(async (t): Promise<TaskResult> => {
                 // Find agent by type
                 const agent = storeAgents.find((a) => a.config.type === t.agentType);
                 if (!agent) {
                   console.warn(`  ⚠️  Agent type "${t.agentType}" not found in router — skipping`);
-                  return { agentName: t.agentName, skipped: true };
+                  return { agentName: t.agentName, agentType: t.agentType, skipped: true };
                 }
 
                 const operationId = `mc-${objectiveId}-${t.agentType}-${Date.now()}`;
@@ -737,9 +754,19 @@ Règles :
                 });
 
                 console.log(`  → Calling ${t.agentName} (${t.agentType})...`);
-                const response = await agent.chat(taskMessage, context, conversationId);
 
-                // Save agent response
+                let response: string;
+                try {
+                  response = await agent.chat(taskMessage, context, conversationId);
+                } catch (chatErr) {
+                  console.error(`  ✗ ${t.agentName} failed:`, chatErr);
+                  return {
+                    agentName: t.agentName, agentType: t.agentType,
+                    failed: true, error: String(chatErr),
+                  };
+                }
+
+                // Save agent response to chat UI
                 await saveChatMessage({
                   storeId,
                   agentId: agent.config.id,
@@ -747,14 +774,86 @@ Règles :
                   content: response,
                 });
 
+                // ── Mark the corresponding Project as completed ──────────────
+                try {
+                  const project = await prisma.project.findFirst({
+                    where: { objectiveId, ownerAgentId: agent.config.id, status: 'active' },
+                    orderBy: { createdAt: 'desc' },
+                  });
+                  if (project) {
+                    await prisma.project.update({
+                      where: { id: project.id },
+                      data: { status: 'completed' },
+                    });
+                    console.log(`  ✅ Project "${project.title}" marked completed`);
+                  }
+                } catch (dbErr) {
+                  console.warn(`  ⚠️  Could not update project status:`, dbErr);
+                }
+
                 console.log(`  ✓ ${t.agentName} completed task`);
-                return { agentName: t.agentName, done: true };
+                return { agentName: t.agentName, agentType: t.agentType, done: true, response };
               })
             );
 
-            const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-            const failed = results.filter((r) => r.status === 'rejected').length;
-            console.log(`\n✅ Mission Control: ${succeeded}/${tasks.length} tasks executed${failed > 0 ? `, ${failed} failed` : ''}\n`);
+            // ── Build Telegram summary ───────────────────────────────────────
+            const taskResults: TaskResult[] = settled.map((r) =>
+              r.status === 'fulfilled' ? r.value : { agentName: '?', agentType: '?', failed: true, error: String((r as PromiseRejectedResult).reason) }
+            );
+
+            const succeeded = taskResults.filter((r) => r.done).length;
+            const failed = taskResults.filter((r) => r.failed || r.skipped).length;
+
+            console.log(`\n✅ Mission Control: ${succeeded}/${tasks.length} tasks done${failed > 0 ? `, ${failed} failed/skipped` : ''}\n`);
+
+            // Check if all projects for this objective are now done → mark objective completed
+            if (succeeded > 0) {
+              try {
+                const remainingActive = await prisma.project.count({
+                  where: { objectiveId, status: 'active' },
+                });
+                if (remainingActive === 0) {
+                  await prisma.objective.update({
+                    where: { id: objectiveId },
+                    data: { status: 'completed' },
+                  });
+                  console.log(`  🎯 Objective "${objectiveTitle}" marked completed`);
+                }
+              } catch { /* non-fatal */ }
+            }
+
+            // Send Telegram notification
+            if (missionTelegramNotifier && succeeded > 0) {
+              const lines: string[] = [
+                `✅ *Mission accomplie* — ${objectiveTitle}`,
+                '',
+              ];
+
+              for (const r of taskResults) {
+                if (r.done && r.response) {
+                  // Trim response to first ~200 chars for Telegram readability
+                  const preview = r.response.replace(/\n+/g, ' ').slice(0, 220);
+                  const ellipsis = r.response.length > 220 ? '…' : '';
+                  lines.push(`*${r.agentName}* — Terminé`);
+                  lines.push(`↳ ${preview}${ellipsis}`);
+                  lines.push('');
+                } else if (r.skipped) {
+                  lines.push(`*${r.agentName}* — ⚠️ Agent non trouvé`);
+                  lines.push('');
+                } else if (r.failed) {
+                  lines.push(`*${r.agentName}* — ✗ Erreur`);
+                  lines.push('');
+                }
+              }
+
+              lines.push(`_${succeeded}/${tasks.length} tâche${tasks.length > 1 ? 's' : ''} complétée${succeeded > 1 ? 's' : ''} — résultats visibles dans chaque chat._`);
+
+              try {
+                await missionTelegramNotifier(storeId, lines.join('\n'), false);
+              } catch (tgErr) {
+                console.warn('  ⚠️  Telegram notification failed:', tgErr);
+              }
+            }
 
           } catch (error) {
             console.error('Mission Control execution error:', error);

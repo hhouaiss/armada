@@ -172,6 +172,13 @@ export default function ObjectivesPage() {
     if (storeId) loadAll();
   }, [storeId, statusFilter]);
 
+  // Auto-refresh every 15s when agents are running (dispatched) to pick up project completions
+  useEffect(() => {
+    if (!storeId || dispatchedAgents.length === 0) return;
+    const interval = setInterval(() => loadAll(), 8000);
+    return () => clearInterval(interval);
+  }, [storeId, dispatchedAgents.length]);
+
   async function loadAll() {
     setLoading(true);
     try {
