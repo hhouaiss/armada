@@ -1,14 +1,16 @@
 /**
  * POST /api/agents/provision-departments
  *
- * Provisions the 4 new strategic departments if they don't already exist.
- * Idempotent — safe to call multiple times, skips agents that already exist.
+ * Smart provisioning — idempotent, avoids redundancy:
+ *   - Checks existing agents by department keyword coverage (not just exact type)
+ *   - Only CREATES agents for departments with no coverage at all
+ *   - UPGRADES capabilities of existing agents that cover a department
  *
  * Departments:
- *   - Growth & Acquisition (web, seo, products)
- *   - Finance & Analytique (orders, store)
- *   - Publicité & Ads (marketing, web)
- *   - CX VIP (customers, marketing)
+ *   - Growth & Acquisition  → create "Alex" (growth) if no growth-type agent exists
+ *   - Finance & Analytique  → create "Sofia" (finance) — always new
+ *   - Publicité & Ads       → create "Marco" (ads) if no marketing/email agent exists
+ *   - CX VIP                → create "Luna" (cx) — always new
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,7 +18,20 @@ import { prisma } from '@/lib/prisma';
 
 // ─── Department definitions ───────────────────────────────────────────────────
 
-const DEPARTMENTS = [
+interface DeptDef {
+  type: string;
+  name: string;
+  designation: string;
+  personality: string;
+  systemPrompt: string;
+  capabilities: { allowed: string[] };
+  /** Type keywords — if ANY existing agent's type contains one, dept is "covered" */
+  coverageKeywords: string[];
+  /** Capabilities to ADD to the covering agent (merged, no duplicates) */
+  capabilityUpgrade: string[];
+}
+
+const DEPARTMENTS: DeptDef[] = [
   {
     type: 'growth',
     name: 'Alex',
@@ -49,6 +64,8 @@ Tes recommandations sont toujours accompagnées de données et d'un impact estim
 
 Réponds toujours en français.`,
     capabilities: { allowed: ['products', 'web', 'seo', 'store', 'collections'] },
+    coverageKeywords: ['growth', 'acquisition', 'hacker', 'paid'],
+    capabilityUpgrade: ['web', 'seo', 'collections'],
   },
   {
     type: 'finance',
@@ -79,6 +96,8 @@ Utilise des tableaux et pourcentages. Reste factuel, sans embellissement.
 
 Réponds toujours en français.`,
     capabilities: { allowed: ['orders', 'customers', 'products', 'store', 'inventory'] },
+    coverageKeywords: ['finance', 'cfo', 'analyt', 'reporting', 'p&l'],
+    capabilityUpgrade: [],
   },
   {
     type: 'ads',
@@ -111,6 +130,8 @@ Tu connais les meilleures pratiques email/SMS marketing.
 
 Réponds toujours en français.`,
     capabilities: { allowed: ['marketing', 'customers', 'web', 'store'] },
+    coverageKeywords: ['email', 'marketing', 'klaviyo', 'campaign', 'ads', 'sms'],
+    capabilityUpgrade: ['web', 'customers'],
   },
   {
     type: 'cx',
@@ -141,8 +162,39 @@ Segment VIP = top 20% en valeur. Segment à risque = pas d'achat depuis 90+ jour
 
 Réponds toujours en français.`,
     capabilities: { allowed: ['customers', 'orders', 'marketing', 'products'] },
+    coverageKeywords: ['cx', 'vip', 'retention', 'fidel', 'customer_success', 'support'],
+    capabilityUpgrade: [],
   },
 ];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Returns the existing agent whose type string matches any coverage keyword, or null */
+function findCoveringAgent(
+  agents: Array<{ id: string; type: string; capabilities: unknown }>,
+  dept: DeptDef,
+): { id: string; type: string; capabilities: unknown } | null {
+  for (const agent of agents) {
+    const t = agent.type.toLowerCase();
+    if (dept.coverageKeywords.some((kw) => t.includes(kw))) return agent;
+  }
+  return null;
+}
+
+/** Merge capability arrays without duplicates */
+function mergeCapabilities(
+  existing: unknown,
+  toAdd: string[],
+): { allowed: string[] } {
+  const base =
+    existing &&
+    typeof existing === 'object' &&
+    'allowed' in (existing as object)
+      ? ((existing as { allowed: string[] }).allowed ?? [])
+      : [];
+  const merged = Array.from(new Set([...base, ...toAdd]));
+  return { allowed: merged };
+}
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 
@@ -164,19 +216,64 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
 
-    const results: { type: string; name: string; status: 'created' | 'exists' }[] = [];
+    // Load ALL existing agents for this store (not just the 4 dept types)
+    const existingAgents = await prisma.agent.findMany({
+      where: { storeId, isActive: true },
+      select: { id: true, type: true, name: true, capabilities: true },
+    });
+
+    const results: {
+      type: string;
+      name: string;
+      designation: string;
+      status: 'created' | 'exists' | 'upgraded' | 'covered';
+      coveredBy?: string;
+    }[] = [];
 
     for (const dept of DEPARTMENTS) {
-      // Check if this type already exists for this store
-      const existing = await prisma.agent.findFirst({
-        where: { storeId, type: dept.type },
-      });
-
-      if (existing) {
-        results.push({ type: dept.type, name: dept.name, status: 'exists' });
+      // 1. Check exact type match (already provisioned as a dept agent)
+      const exactMatch = existingAgents.find((a) => a.type === dept.type);
+      if (exactMatch) {
+        results.push({
+          type: dept.type,
+          name: dept.name,
+          designation: dept.designation,
+          status: 'exists',
+        });
         continue;
       }
 
+      // 2. Check if an existing agent already covers this department
+      const covering = findCoveringAgent(existingAgents, dept);
+
+      if (covering) {
+        // Upgrade capabilities of the covering agent if needed
+        if (dept.capabilityUpgrade.length > 0) {
+          const merged = mergeCapabilities(covering.capabilities, dept.capabilityUpgrade);
+          await prisma.agent.update({
+            where: { id: covering.id },
+            data: { capabilities: merged },
+          });
+          results.push({
+            type: dept.type,
+            name: dept.name,
+            designation: dept.designation,
+            status: 'upgraded',
+            coveredBy: covering.type,
+          });
+        } else {
+          results.push({
+            type: dept.type,
+            name: dept.name,
+            designation: dept.designation,
+            status: 'covered',
+            coveredBy: covering.type,
+          });
+        }
+        continue;
+      }
+
+      // 3. No coverage at all → create the department agent
       await prisma.agent.create({
         data: {
           agentId: `${dept.type}-${storeId}`,
@@ -192,18 +289,28 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      results.push({ type: dept.type, name: dept.name, status: 'created' });
+      results.push({
+        type: dept.type,
+        name: dept.name,
+        designation: dept.designation,
+        status: 'created',
+      });
     }
 
     const created = results.filter((r) => r.status === 'created').length;
+    const upgraded = results.filter((r) => r.status === 'upgraded').length;
 
-    return NextResponse.json({
-      success: true,
-      results,
-      message: created > 0
-        ? `${created} nouveau(x) département(s) déployé(s). Rechargez le gateway pour activer les agents.`
-        : 'Tous les départements étaient déjà déployés.',
-    });
+    let message = '';
+    if (created === 0 && upgraded === 0) {
+      message = 'Tous les départements sont déjà couverts par l\'équipe existante.';
+    } else {
+      const parts = [];
+      if (created > 0) parts.push(`${created} nouvel agent créé${created > 1 ? 's' : ''}`);
+      if (upgraded > 0) parts.push(`${upgraded} agent${upgraded > 1 ? 's' : ''} mis à jour`);
+      message = `${parts.join(', ')}. Rechargez le gateway pour activer les changements.`;
+    }
+
+    return NextResponse.json({ success: true, results, message });
   } catch (error) {
     console.error('Error provisioning departments:', error);
     return NextResponse.json({ error: 'Failed to provision departments' }, { status: 500 });
@@ -218,22 +325,29 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const existingTypes = await prisma.agent.findMany({
+  const existingAgents = await prisma.agent.findMany({
     where: { storeId, isActive: true },
-    select: { type: true, name: true },
+    select: { id: true, type: true, name: true, capabilities: true },
   });
 
-  const existingTypeSet = new Set(existingTypes.map((a) => a.type));
+  const departments = DEPARTMENTS.map((d) => {
+    const exactMatch = existingAgents.find((a) => a.type === d.type);
+    const covering = exactMatch ? null : findCoveringAgent(existingAgents, d);
 
-  const departments = DEPARTMENTS.map((d) => ({
-    type: d.type,
-    name: d.name,
-    designation: d.designation,
-    role: d.personality.split(' — ')[0],
-    specialty: d.personality.split(' — ')[1] ?? '',
-    capabilities: d.capabilities.allowed,
-    deployed: existingTypeSet.has(d.type),
-  }));
+    return {
+      type: d.type,
+      name: d.name,
+      designation: d.designation,
+      role: d.personality.split(' — ')[0],
+      specialty: d.personality.split(' — ')[1] ?? '',
+      capabilities: d.capabilities.allowed,
+      deployed: !!(exactMatch || covering),
+      coveredBy: covering ? covering.type : undefined,
+      coveredByName: covering
+        ? (existingAgents.find((a) => a.type === covering.type)?.name ?? undefined)
+        : undefined,
+    };
+  });
 
   return NextResponse.json({ departments });
 }
