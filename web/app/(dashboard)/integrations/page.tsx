@@ -4,7 +4,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Check, ExternalLink, Key, Loader2, Search, X,
-  Globe, MessageSquare, ShoppingBag, BarChart2, Code2, CreditCard,
+  Globe, MessageSquare, ShoppingBag, BarChart2, Code2, CreditCard, Megaphone,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import { cn } from '@/lib/utils';
@@ -23,20 +23,124 @@ interface AppDef {
   oauthPath?: string;    // e.g. /api/auth/google
   docsUrl?: string;
   badge?: string;        // 'Connecté', 'Bientôt', etc.
+  tier?: 'core';         // 'core' = part of the ecommerce stack (shown first)
 }
 
+// Ecommerce-first ordering: the store stack leads, generic tools follow.
 const CATEGORIES = [
-  { id: 'all',          label: 'Tout',          icon: Globe },
-  { id: 'productivity', label: 'Productivité',  icon: Globe },
-  { id: 'communication',label: 'Communication', icon: MessageSquare },
-  { id: 'ecommerce',    label: 'E-commerce',    icon: ShoppingBag },
-  { id: 'analytics',    label: 'Analytics',     icon: BarChart2 },
-  { id: 'dev',          label: 'Dev / Tech',    icon: Code2 },
-  { id: 'finance',      label: 'Finance',       icon: CreditCard },
+  { id: 'all',          label: 'Tout',           icon: Globe },
+  { id: 'ecommerce',    label: 'E-commerce',     icon: ShoppingBag },
+  { id: 'marketing',    label: 'Marketing & Ads',icon: Megaphone },
+  { id: 'analytics',    label: 'Analytics & SEO',icon: BarChart2 },
+  { id: 'finance',      label: 'Finance',        icon: CreditCard },
+  { id: 'communication',label: 'Communication',  icon: MessageSquare },
+  { id: 'productivity', label: 'Productivité',   icon: Globe },
+  { id: 'dev',          label: 'Dev / Tech',     icon: Code2 },
 ];
 
 const APPS: AppDef[] = [
-  // Productivité
+  // ── Ecommerce stack (core) ──
+  {
+    id: 'shopify',
+    name: 'Shopify',
+    description: 'Connectez votre boutique pour que vos agents gèrent produits, stocks et commandes.',
+    logo: '🛍️',
+    category: 'ecommerce',
+    authType: 'oauth',
+    oauthPath: '/api/shopify/install',
+    tier: 'core',
+  },
+  {
+    id: 'klaviyo',
+    name: 'Klaviyo',
+    description: 'Campagnes et flows email/SMS : panier abandonné, winback, fidélité.',
+    logo: 'K',
+    category: 'marketing',
+    authType: 'apikey',
+    tier: 'core',
+  },
+  {
+    id: 'gsc',
+    name: 'Google Search Console',
+    description: 'Analysez vos performances SEO, mots-clés et positions produit.',
+    logo: '🔍',
+    category: 'analytics',
+    authType: 'oauth',
+    oauthPath: '/api/auth/google',
+    tier: 'core',
+  },
+  {
+    id: 'ga4',
+    name: 'Google Analytics',
+    description: 'Suivez le trafic, les conversions et le tunnel d\'achat.',
+    logo: '📊',
+    category: 'analytics',
+    authType: 'oauth',
+    oauthPath: '/api/auth/google',
+    badge: 'Bientôt',
+    tier: 'core',
+  },
+  {
+    id: 'meta-ads',
+    name: 'Meta Ads',
+    description: 'Pilotez vos campagnes Facebook & Instagram et suivez le ROAS.',
+    logo: 'f',
+    category: 'marketing',
+    authType: 'oauth',
+    oauthPath: '/api/auth/meta',
+    badge: 'Bientôt',
+    tier: 'core',
+  },
+  {
+    id: 'google-ads',
+    name: 'Google Ads',
+    description: 'Gérez vos campagnes Search & Shopping et optimisez le ROAS.',
+    logo: 'G',
+    category: 'marketing',
+    authType: 'oauth',
+    oauthPath: '/api/auth/google',
+    badge: 'Bientôt',
+    tier: 'core',
+  },
+  {
+    id: 'stripe',
+    name: 'Stripe',
+    description: 'Consultez vos paiements, abonnements et revenus.',
+    logo: 'S',
+    category: 'finance',
+    authType: 'apikey',
+    badge: 'Bientôt',
+    tier: 'core',
+  },
+  {
+    id: 'telegram',
+    name: 'Telegram',
+    description: 'Recevez les alertes de vos agents et pilotez votre boutique au chat.',
+    logo: '✈️',
+    category: 'communication',
+    authType: 'apikey',
+    tier: 'core',
+  },
+  // ── Autres outils (secondary) ──
+  {
+    id: 'gmail',
+    name: 'Gmail',
+    description: 'Lisez, rédigez et envoyez des emails via Gmail.',
+    logo: 'M',
+    category: 'communication',
+    authType: 'oauth',
+    oauthPath: '/api/auth/google',
+    badge: 'Bientôt',
+  },
+  {
+    id: 'slack',
+    name: 'Slack',
+    description: 'Envoyez des messages dans vos canaux Slack.',
+    logo: '#',
+    category: 'communication',
+    authType: 'apikey',
+    badge: 'Bientôt',
+  },
   {
     id: 'notion',
     name: 'Notion',
@@ -79,74 +183,6 @@ const APPS: AppDef[] = [
     authType: 'apikey',
     badge: 'Bientôt',
   },
-  // Communication
-  {
-    id: 'telegram',
-    name: 'Telegram',
-    description: 'Recevez des alertes et interagissez avec vos agents via Telegram.',
-    logo: '✈️',
-    category: 'communication',
-    authType: 'apikey',
-  },
-  {
-    id: 'slack',
-    name: 'Slack',
-    description: 'Envoyez des messages dans vos canaux Slack.',
-    logo: '#',
-    category: 'communication',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    description: 'Lisez, rédigez et envoyez des emails via Gmail.',
-    logo: 'M',
-    category: 'communication',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    badge: 'Bientôt',
-  },
-  // E-commerce
-  {
-    id: 'shopify',
-    name: 'Shopify',
-    description: 'Connectez votre boutique pour que vos agents gèrent produits, stocks et commandes.',
-    logo: '🛍️',
-    category: 'ecommerce',
-    authType: 'oauth',
-    oauthPath: '/api/shopify/install',
-  },
-  {
-    id: 'stripe',
-    name: 'Stripe',
-    description: 'Consultez vos paiements, abonnements et revenus.',
-    logo: 'S',
-    category: 'finance',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-  // Analytics / SEO
-  {
-    id: 'gsc',
-    name: 'Google Search Console',
-    description: 'Analysez vos performances SEO, mots-clés et positions.',
-    logo: '🔍',
-    category: 'analytics',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-  },
-  {
-    id: 'ga4',
-    name: 'Google Analytics',
-    description: 'Suivez le trafic, les conversions et les événements.',
-    logo: '📊',
-    category: 'analytics',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    badge: 'Bientôt',
-  },
-  // Dev / Tech
   {
     id: 'github',
     name: 'GitHub',
@@ -247,6 +283,115 @@ function ApiKeyModal({
   );
 }
 
+// ── App card ─────────────────────────────────────────────────────────────────
+
+function AppCard({
+  app, isConnected, isConnecting, onConnect, onDisconnect,
+}: {
+  app: AppDef;
+  isConnected: boolean;
+  isConnecting: boolean;
+  onConnect: (app: AppDef) => void;
+  onDisconnect: (id: string) => void;
+}) {
+  const isSoon = app.badge === 'Bientôt';
+  return (
+    <div
+      className={cn(
+        'relative rounded-2xl border transition-all duration-200 overflow-hidden',
+        isConnected
+          ? 'border-[var(--armada-primary)]/30'
+          : isSoon
+            ? 'border-[var(--armada-accent)]/30 opacity-60'
+            : 'border-[var(--armada-accent)]/50 hover:border-[var(--armada-primary)]/20'
+      )}
+      style={{ backgroundColor: 'var(--armada-surface)' }}
+    >
+      {/* Connected accent */}
+      {isConnected && (
+        <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ backgroundColor: 'var(--armada-primary)' }} />
+      )}
+
+      <div className="p-4 space-y-3">
+        {/* Logo + name */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-xl border border-[var(--armada-accent)]/50 flex items-center justify-center text-base font-bold shrink-0"
+              style={{ backgroundColor: 'var(--armada-bg)' }}
+            >
+              {app.logo}
+            </div>
+            <div>
+              <div className="text-sm font-medium text-[var(--armada-text)]">{app.name}</div>
+              <div className="text-[9px] font-mono uppercase tracking-widest text-[var(--armada-text)]/30">
+                {CATEGORIES.find(c => c.id === app.category)?.label || app.category}
+              </div>
+            </div>
+          </div>
+
+          {/* Status badges */}
+          {isConnected && (
+            <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
+              style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}
+            >
+              <Check className="h-2.5 w-2.5" />
+              Connecté
+            </span>
+          )}
+          {isSoon && !isConnected && (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-mono border border-[var(--armada-accent)]/40 text-[var(--armada-text)]/30 shrink-0">
+              Bientôt
+            </span>
+          )}
+        </div>
+
+        {/* Description */}
+        <p className="text-xs text-[var(--armada-text)]/55 leading-relaxed">
+          {app.description}
+        </p>
+
+        {/* Action */}
+        {isConnected ? (
+          <div className="flex gap-2">
+            <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">
+              Actif
+            </span>
+            <button
+              onClick={() => onDisconnect(app.id)}
+              className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
+            >
+              Déconnecter
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => onConnect(app)}
+            disabled={isSoon || isConnecting}
+            className={cn(
+              'w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium transition-all',
+              isSoon
+                ? 'border border-[var(--armada-accent)]/30 text-[var(--armada-text)]/30 cursor-not-allowed'
+                : 'text-white hover:opacity-90'
+            )}
+            style={!isSoon ? { backgroundColor: 'var(--armada-primary)' } : {}}
+          >
+            {isConnecting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <>
+                {app.authType === 'apikey' ? <Key className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
+                {isSoon ? 'Disponible bientôt' : 'Connecter'}
+              </>
+            )}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function IntegrationsPage() {
@@ -270,6 +415,11 @@ export default function IntegrationsPage() {
     const matchSearch = !search || app.name.toLowerCase().includes(search.toLowerCase()) || app.description.toLowerCase().includes(search.toLowerCase());
     return matchCat && matchSearch;
   });
+
+  // In the default "Tout" view, lead with the ecommerce stack, then other tools.
+  const isAllView = activeCategory === 'all' && !search;
+  const coreApps = filtered.filter(a => a.tier === 'core');
+  const otherApps = filtered.filter(a => a.tier !== 'core');
 
   const handleConnect = async (app: AppDef) => {
     if (app.badge === 'Bientôt') return;
@@ -357,114 +507,69 @@ export default function IntegrationsPage() {
       </div>
 
       {/* ── Grid ── */}
-      <div className="p-4 md:p-6">
+      <div className="p-4 md:p-6 space-y-8">
         {filtered.length === 0 ? (
           <div className="text-center py-16">
             <p className="text-sm text-[var(--armada-text)]/40">Aucune app trouvée</p>
           </div>
+        ) : isAllView ? (
+          <>
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="h-3.5 w-3.5 text-[var(--armada-primary)]" />
+                <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
+                  Stack e-commerce
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {coreApps.map(app => (
+                  <AppCard
+                    key={app.id}
+                    app={app}
+                    isConnected={connected.includes(app.id)}
+                    isConnecting={connecting === app.id}
+                    onConnect={handleConnect}
+                    onDisconnect={handleDisconnect}
+                  />
+                ))}
+              </div>
+            </section>
+
+            {otherApps.length > 0 && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-3.5 w-3.5 text-[var(--armada-text)]/40" />
+                  <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
+                    Autres outils
+                  </h2>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {otherApps.map(app => (
+                    <AppCard
+                      key={app.id}
+                      app={app}
+                      isConnected={connected.includes(app.id)}
+                      isConnecting={connecting === app.id}
+                      onConnect={handleConnect}
+                      onDisconnect={handleDisconnect}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filtered.map(app => {
-              const isConnected = connected.includes(app.id);
-              const isSoon = app.badge === 'Bientôt';
-              const isConnecting = connecting === app.id;
-              return (
-                <div
-                  key={app.id}
-                  className={cn(
-                    'relative rounded-2xl border transition-all duration-200 overflow-hidden',
-                    isConnected
-                      ? 'border-[var(--armada-primary)]/30'
-                      : isSoon
-                        ? 'border-[var(--armada-accent)]/30 opacity-60'
-                        : 'border-[var(--armada-accent)]/50 hover:border-[var(--armada-primary)]/20'
-                  )}
-                  style={{ backgroundColor: 'var(--armada-surface)' }}
-                >
-                  {/* Connected accent */}
-                  {isConnected && (
-                    <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ backgroundColor: 'var(--armada-primary)' }} />
-                  )}
-
-                  <div className="p-4 space-y-3">
-                    {/* Logo + name */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-10 h-10 rounded-xl border border-[var(--armada-accent)]/50 flex items-center justify-center text-base font-bold shrink-0"
-                          style={{ backgroundColor: 'var(--armada-bg)' }}
-                        >
-                          {app.logo}
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium text-[var(--armada-text)]">{app.name}</div>
-                          <div className="text-[9px] font-mono uppercase tracking-widest text-[var(--armada-text)]/30">
-                            {CATEGORIES.find(c => c.id === app.category)?.label || app.category}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Status badges */}
-                      {isConnected && (
-                        <span
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
-                          style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}
-                        >
-                          <Check className="h-2.5 w-2.5" />
-                          Connecté
-                        </span>
-                      )}
-                      {isSoon && !isConnected && (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-mono border border-[var(--armada-accent)]/40 text-[var(--armada-text)]/30 shrink-0">
-                          Bientôt
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Description */}
-                    <p className="text-xs text-[var(--armada-text)]/55 leading-relaxed">
-                      {app.description}
-                    </p>
-
-                    {/* Action */}
-                    {isConnected ? (
-                      <div className="flex gap-2">
-                        <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">
-                          Actif
-                        </span>
-                        <button
-                          onClick={() => handleDisconnect(app.id)}
-                          className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
-                        >
-                          Déconnecter
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => handleConnect(app)}
-                        disabled={isSoon || isConnecting}
-                        className={cn(
-                          'w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium transition-all',
-                          isSoon
-                            ? 'border border-[var(--armada-accent)]/30 text-[var(--armada-text)]/30 cursor-not-allowed'
-                            : 'text-white hover:opacity-90'
-                        )}
-                        style={!isSoon ? { backgroundColor: 'var(--armada-primary)' } : {}}
-                      >
-                        {isConnecting ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <>
-                            {app.authType === 'apikey' ? <Key className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
-                            {isSoon ? 'Disponible bientôt' : 'Connecter'}
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {filtered.map(app => (
+              <AppCard
+                key={app.id}
+                app={app}
+                isConnected={connected.includes(app.id)}
+                isConnecting={connecting === app.id}
+                onConnect={handleConnect}
+                onDisconnect={handleDisconnect}
+              />
+            ))}
           </div>
         )}
       </div>

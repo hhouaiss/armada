@@ -24,6 +24,8 @@ import {
   Slack,
   ShoppingBag,
   Chrome,
+  Package,
+  Megaphone,
 } from 'lucide-react';
 
 // ── Structured data (JSON-LD) pour SEO/GEO ─────────────────────────
@@ -33,15 +35,15 @@ const jsonLd = {
   name: 'Armada HQ',
   applicationCategory: 'BusinessApplication',
   description:
-    'Plateforme agentique qui permet aux entreprises de déployer une équipe d\'agents IA autonomes pour automatiser leurs opérations métier : recherche, finance, support, marketing, opérations.',
+    'Plateforme agentique e-commerce qui permet aux marchands Shopify de déployer une escouade d\'agents IA pour gérer leur boutique : stock, SEO, marketing, support, finances.',
   operatingSystem: 'Web',
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' },
   featureList: [
-    'Agents IA autonomes',
-    'Automatisation des opérations métier',
+    'Agents IA spécialisés e-commerce',
+    'Automatisation des opérations boutique (stock, SEO, marketing, support)',
+    'Intégration Shopify, Klaviyo, Search Console, GA4',
     'Orchestration multi-agents',
     'Validation humaine des actions critiques',
-    'Compatible tous secteurs',
   ],
   inLanguage: 'fr',
 };
@@ -127,7 +129,7 @@ function Hero() {
           className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[var(--armada-accent)]/60 bg-[var(--armada-surface)]/60 backdrop-blur-sm text-xs font-medium text-[var(--armada-text)]/60 mb-8"
         >
           <span aria-hidden="true" className="w-2 h-2 rounded-full bg-[var(--armada-primary)] animate-pulse" />
-          ArmadaOS 1.0 — Système Opérationnel IA
+          ArmadaOS 1.0 — L'OS IA de votre boutique Shopify
         </motion.div>
 
         {/* Headline principal — optimisé SEO/GEO */}
@@ -148,9 +150,9 @@ function Hero() {
           {...fadeUp(0.2)}
           className="text-lg md:text-xl text-[var(--armada-text)]/60 max-w-2xl mb-12 leading-relaxed"
         >
-          Armada déploie une équipe d'agents IA autonomes qui exécutent vos
-          opérations métier — recherche, finance, support, marketing — pendant
-          que vous pilotez votre entreprise.
+          Armada déploie une escouade d'agents IA qui font tourner votre boutique
+          Shopify — stock, SEO, marketing, support, finances — pendant que vous
+          vous concentrez sur la croissance.
         </motion.p>
 
         {/* CTAs */}
@@ -196,49 +198,56 @@ function Hero() {
   );
 }
 
-// ── Agents — archetypal & généralistes ─────────────────────────────
+// ── Agents — escouade e-commerce ────────────────────────────────────
 const agents = [
   {
+    icon: <ShoppingBag className="w-6 h-6" aria-hidden="true" />,
+    name: 'Merchandising',
+    role: 'Catalogue & Fiches Produit',
+    desc: 'Optimise vos fiches produit, structure vos collections et soigne le SEO produit. Vos pages vendent mieux, sans effort.',
+    sectors: ['Fiches produit', 'Collections', 'SEO produit'],
+  },
+  {
+    icon: <Package className="w-6 h-6" aria-hidden="true" />,
+    name: 'Stock',
+    role: 'Inventaire & Réappro',
+    desc: 'Surveille vos niveaux de stock, alerte avant la rupture et prépare vos demandes de réapprovisionnement. Plus jamais de best-seller en rupture.',
+    sectors: ['Alertes stock', 'Réappro', 'Prévisions'],
+  },
+  {
     icon: <Search className="w-6 h-6" aria-hidden="true" />,
-    name: 'Analyste',
-    role: 'Veille & Intelligence',
-    desc: 'Surveille votre marché, analyse la concurrence et synthétise des rapports actionnables. Vos décisions stratégiques, alimentées par des données fraîches.',
-    sectors: ['Conseil', 'Finance', 'Retail'],
+    name: 'Acquisition',
+    role: 'SEO & Croissance',
+    desc: 'Analyse votre Search Console, surveille la concurrence et capte la demande organique. Votre trafic gratuit, en croissance continue.',
+    sectors: ['SEO', 'Search Console', 'Concurrence'],
   },
   {
-    icon: <Zap className="w-6 h-6" aria-hidden="true" />,
-    name: 'Opérations',
-    role: 'Automatisation & Processus',
-    desc: 'Prend en charge les tâches récurrentes à faible valeur : saisies, relances, mises à jour, synchronisations. Vos équipes se concentrent sur ce qui compte.',
-    sectors: ['Logistique', 'Services B2B', 'RH'],
-  },
-  {
-    icon: <BarChart3 className="w-6 h-6" aria-hidden="true" />,
-    name: 'Finance',
-    role: 'Reporting & KPIs',
-    desc: 'Agrège vos données financières, détecte les anomalies et génère vos reportings. Vos chiffres sont prêts, toujours à jour, sans effort.',
-    sectors: ['PME', 'Conseil', 'E-commerce'],
+    icon: <Megaphone className="w-6 h-6" aria-hidden="true" />,
+    name: 'Marketing',
+    role: 'Campagnes & Rétention',
+    desc: 'Pilote vos campagnes et flows Klaviyo : panier abandonné, winback, fidélité. Chaque panier récupéré, chaque client relancé.',
+    sectors: ['Email & SMS', 'Panier abandonné', 'Winback'],
   },
   {
     icon: <Headphones className="w-6 h-6" aria-hidden="true" />,
     name: 'Support',
-    role: 'Relation Client & Qualification',
-    desc: 'Répond aux demandes fréquentes, qualifie les leads entrants et escalade ce qui requiert votre attention. Chaque client reçoit une réponse immédiate.',
-    sectors: ['SaaS', 'Immobilier', 'E-commerce'],
+    role: 'Relation Client & CX',
+    desc: 'Traite les demandes, gère les retours et segmente vos clients VIP. Chaque client reçoit une réponse rapide, vous validez le reste.',
+    sectors: ['Support', 'Retours', 'VIP'],
   },
   {
-    icon: <FileText className="w-6 h-6" aria-hidden="true" />,
-    name: 'Marketing',
-    role: 'Contenu & Communication',
-    desc: 'Rédige articles, posts, emailings et fiches produit optimisés pour le référencement. Votre présence digitale, maintenue sans effort.',
-    sectors: ['Agences', 'Startups', 'Retail'],
+    icon: <BarChart3 className="w-6 h-6" aria-hidden="true" />,
+    name: 'Finance',
+    role: 'Marges & Analytics',
+    desc: 'Suit revenus, marges, panier moyen et LTV — et alerte sur les fuites. Vos chiffres clés, toujours à jour, sans tableur.',
+    sectors: ['Revenus', 'Panier moyen', 'LTV'],
   },
   {
     icon: <Cpu className="w-6 h-6" aria-hidden="true" />,
     name: 'Le Major',
     role: 'Orchestrateur en Chef',
-    desc: 'Coordonne l\'ensemble de l\'escouade, délègue les missions aux bons agents et synthétise les résultats. Votre chef des opérations IA.',
-    sectors: ['Tous secteurs'],
+    desc: 'Coordonne l\'ensemble de l\'escouade, délègue les missions aux bons agents et synthétise les résultats. Votre chef des opérations boutique.',
+    sectors: ['Toute la boutique'],
     commander: true,
   },
 ];
@@ -312,35 +321,35 @@ function AgentRoster() {
           ))}
         </div>
 
-        {/* Note généraliste */}
+        {/* Note */}
         <motion.p
           {...fadeIn(0.3)}
           className="mt-10 text-center text-sm text-[var(--armada-text)]/40"
         >
-          Le Major peut recruter de nouveaux agents spécialisés à tout moment — selon vos besoins métier.
+          Le Major peut recruter de nouveaux agents spécialisés à tout moment — selon les besoins de votre boutique.
         </motion.p>
       </div>
     </section>
   );
 }
 
-// ── Secteurs cibles ─────────────────────────────────────────────────
+// ── Types de boutiques ──────────────────────────────────────────────
 const sectors = [
   {
-    name: 'E-commerce',
-    desc: 'Automatisez la gestion catalogue, les stocks, la relation client et le marketing produit.',
+    name: 'Mode & accessoires',
+    desc: 'Catalogue large, saisons et retours : vos fiches produit et collections restent optimisées toute l\'année.',
   },
   {
-    name: 'Conseil & Audit',
-    desc: 'Industrialisez la veille, la production de livrables et le reporting client.',
+    name: 'Beauté & cosmétiques',
+    desc: 'Réassort, fidélisation et avis : vos best-sellers ne tombent jamais en rupture, vos clientes reviennent.',
   },
   {
-    name: 'Immobilier',
-    desc: 'Qualifiez les leads entrants, rédigez les annonces et suivez les dossiers en automatique.',
+    name: 'Maison & déco',
+    desc: 'Stock multi-fournisseurs et SEO produit : anticipez les ruptures et captez la demande organique.',
   },
   {
-    name: 'Services B2B',
-    desc: 'Automatisez les relances, la qualification commerciale et le support avant-vente.',
+    name: 'Food & marques DTC',
+    desc: 'Récurrence et acquisition : récupérez chaque panier, pilotez ROAS, marge et LTV.',
   },
 ];
 
@@ -355,17 +364,17 @@ function Sectors() {
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-14 gap-6">
           <div>
             <p className="text-xs font-mono text-[var(--armada-primary)] uppercase tracking-widest mb-3">
-              Secteurs
+              Boutiques
             </p>
             <h2
               id="sectors-heading"
               className="font-serif tracking-tight text-4xl md:text-5xl text-[var(--armada-text)]"
             >
-              Conçu pour chaque industrie.
+              Conçu pour les marchands Shopify.
             </h2>
           </div>
           <p className="text-[var(--armada-text)]/50 max-w-xs text-sm leading-relaxed">
-            Armada s'adapte à votre métier, vos outils et vos processus existants — sans refonte.
+            Armada se branche sur votre boutique, vos outils et vos données — sans refonte.
           </p>
         </div>
 

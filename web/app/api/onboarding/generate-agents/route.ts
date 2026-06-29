@@ -2,63 +2,120 @@ import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * POST /api/onboarding/generate-agents
- * Uses Gemma 4 (OpenRouter, cheap ~$0.002/call) to generate 3 custom agents
- * based on the user's business type and goals.
+ *
+ * Armada is an ecommerce-specialized agentic platform. Onboarding does NOT
+ * free-invent arbitrary roles — it proposes a FIXED ecommerce squad whose roles
+ * map 1:1 to the agents that are actually provisioned for a Shopify store
+ * (see /api/shopify/callback defaults + /api/agents/provision-departments).
+ *
+ * The LLM (Gemma via OpenRouter, ~$0.002/call) only PERSONALIZES the squad:
+ * names, tone and one-line descriptions tailored to the merchant's store and
+ * goals. If no key (or the call fails), we return the canonical roster as-is.
  */
+
+// ── Canonical ecommerce squad ─────────────────────────────────────────────────
+// `type` aligns with what gets created on deploy so the preview is honest.
+
+interface RosterAgent {
+  name: string;
+  role: string;
+  designation: string;
+  type: string; // maps to provisioned Agent.type
+  description: string;
+  capabilities: string[];
+  tone: string;
+  personality: string;
+}
+
+const ECOMMERCE_ROSTER: RosterAgent[] = [
+  {
+    name: 'Sophie',
+    role: 'Merchandising & Catalogue',
+    designation: 'SHP-01',
+    type: 'product',
+    description: 'Optimise vos fiches produit, collections et SEO produit pour vendre plus.',
+    capabilities: ['Fiches produit', 'Collections', 'SEO produit', 'Métachamps'],
+    tone: 'Professionnel',
+    personality: 'Analytique et orientée conversion.',
+  },
+  {
+    name: 'Marcus',
+    role: 'Stock & Réapprovisionnement',
+    designation: 'SHP-02',
+    type: 'inventory',
+    description: 'Anticipe les ruptures, surveille le stock et prépare vos réappros.',
+    capabilities: ['Alertes stock', 'Réappro', 'Prévisions', 'Multi-emplacements'],
+    tone: 'Direct',
+    personality: 'Rigoureux et proactif.',
+  },
+  {
+    name: 'Alex',
+    role: 'SEO & Croissance',
+    designation: 'GRW-01',
+    type: 'growth',
+    description: 'Analyse votre trafic, surveille la concurrence et capte la demande organique.',
+    capabilities: ['SEO', 'Search Console', 'Analyse concurrence', 'Redirections'],
+    tone: 'Direct',
+    personality: 'Orienté résultats, pense en métriques.',
+  },
+  {
+    name: 'Marco',
+    role: 'Marketing & Rétention',
+    designation: 'MKT-01',
+    type: 'ads',
+    description: 'Pilote vos campagnes et flows Klaviyo : panier abandonné, winback, fidélité.',
+    capabilities: ['Email & SMS', 'Flows Klaviyo', 'Segments', 'Panier abandonné'],
+    tone: 'Créatif',
+    personality: 'Pense en revenus générés et ROAS.',
+  },
+  {
+    name: 'Luna',
+    role: 'Support & Expérience Client',
+    designation: 'CX-01',
+    type: 'support',
+    description: 'Gère le support, les retours et segmente vos clients VIP.',
+    capabilities: ['Support', 'Retours', 'Tags VIP', 'Rétention'],
+    tone: 'Chaleureux',
+    personality: 'Empathique et réactive.',
+  },
+  {
+    name: 'Sofia',
+    role: 'Finance & Analytics',
+    designation: 'FIN-01',
+    type: 'finance',
+    description: 'Suit revenus, marges, panier moyen et LTV — et alerte sur les fuites.',
+    capabilities: ['Revenus & marges', 'Panier moyen', 'LTV', 'Rapports P&L'],
+    tone: 'Analytique',
+    personality: 'Précise et factuelle.',
+  },
+];
+
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { businessType, businessName, description, goals, teamSize } = body;
+  const { businessName, description, goals, storeDomain } = body;
 
-  if (!businessType || !goals?.length) {
-    return NextResponse.json({ error: 'businessType and goals are required' }, { status: 400 });
-  }
-
-  const goalsText = Array.isArray(goals) ? goals.join(', ') : goals;
-
-  const systemPrompt = `Tu es un expert en IA d'entreprise. Tu crées des équipes d'agents IA sur mesure pour des business.
-Réponds UNIQUEMENT en JSON valide, sans markdown, sans commentaires.`;
-
-  const userPrompt = `Crée exactement 3 agents IA pour ce business :
-
-Business : ${businessName || 'Non précisé'}
-Type : ${businessType}
-Taille d'équipe : ${teamSize || 'non précisée'}
-Description : ${description || 'Non précisée'}
-Objectifs principaux : ${goalsText}
-
-Pour chaque agent, génère :
-- name: un prénom français (ex: Marie, Thomas, Léa)
-- role: titre de poste clair et concis (ex: "Responsable CRM", "Analyste Data")
-- designation: code court 6 caractères (ex: SPEC-01)
-- description: 1 phrase décrivant sa valeur concrète pour CE business
-- capabilities: tableau de 3-4 compétences clés liées aux objectifs
-- tone: ton de communication ("Professionnel", "Chaleureux", "Analytique", "Direct", "Créatif")
-- personality: 1 phrase sur sa personnalité et façon de travailler
-
-Retourne exactement ce JSON (pas de texte autour) :
-{
-  "agents": [
-    {
-      "name": "...",
-      "role": "...",
-      "designation": "...",
-      "description": "...",
-      "capabilities": ["...", "...", "..."],
-      "tone": "...",
-      "personality": "..."
-    }
-  ]
-}`;
-
+  const goalsText = Array.isArray(goals) ? goals.join(', ') : (goals || '');
   const apiKey = process.env.OPENROUTER_API_KEY;
 
+  // No LLM key → return the canonical roster as-is.
   if (!apiKey) {
-    // Fallback: return sensible default agents if no OpenRouter key
-    return NextResponse.json({
-      agents: getDefaultAgents(businessType, goals),
-      source: 'fallback',
-    });
+    return NextResponse.json({ agents: ECOMMERCE_ROSTER, source: 'fallback' });
   }
+
+  const systemPrompt = `Tu personnalises une escouade d'agents IA e-commerce pour une boutique Shopify.
+Tu NE changes PAS les rôles ni l'ordre des agents. Tu adaptes uniquement le prénom, le ton et la description (1 phrase concrète liée à CETTE boutique).
+Réponds UNIQUEMENT en JSON valide, sans markdown, sans commentaires.`;
+
+  const userPrompt = `Boutique : ${businessName || 'Non précisé'}${storeDomain ? ` (${storeDomain})` : ''}
+Description : ${description || 'Non précisée'}
+Objectifs e-commerce : ${goalsText || 'Non précisés'}
+
+Voici l'escouade fixe (NE change PAS "role", "designation", "type" ni "capabilities").
+Pour chaque agent, adapte "name" (prénom FR), "tone" (Professionnel|Chaleureux|Analytique|Direct|Créatif) et "description" (1 phrase concrète pour cette boutique) :
+${JSON.stringify(ECOMMERCE_ROSTER, null, 2)}
+
+Retourne exactement ce JSON (pas de texte autour) :
+{ "agents": [ /* les ${ECOMMERCE_ROSTER.length} agents, même ordre, mêmes role/designation/type/capabilities */ ] }`;
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -67,7 +124,7 @@ Retourne exactement ce JSON (pas de texte autour) :
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': process.env.NEXTAUTH_URL || 'https://armada.app',
-        'X-Title': 'Armada HQ — Onboarding',
+        'X-Title': 'Armada — Onboarding e-commerce',
       },
       body: JSON.stringify({
         model: 'google/gemma-2-27b-it',
@@ -75,65 +132,45 @@ Retourne exactement ce JSON (pas de texte autour) :
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 1200,
-        temperature: 0.7,
+        max_tokens: 1600,
+        temperature: 0.6,
       }),
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      console.error('OpenRouter error:', err);
-      return NextResponse.json({
-        agents: getDefaultAgents(businessType, goals),
-        source: 'fallback',
-      });
+      console.error('OpenRouter error:', await response.text());
+      return NextResponse.json({ agents: ECOMMERCE_ROSTER, source: 'fallback' });
     }
 
     const data = await response.json();
     const raw = data.choices?.[0]?.message?.content || '';
-
-    // Parse JSON from response (strip any surrounding markdown if present)
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return NextResponse.json({
-        agents: getDefaultAgents(businessType, goals),
-        source: 'fallback',
-      });
+      return NextResponse.json({ agents: ECOMMERCE_ROSTER, source: 'fallback' });
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
-    const agents = parsed.agents?.slice(0, 3) || getDefaultAgents(businessType, goals);
+    const llmAgents = Array.isArray(parsed.agents) ? parsed.agents : [];
+
+    // Merge: keep canonical role/designation/type/capabilities, accept LLM's
+    // name/tone/description. This guarantees the preview stays a valid ecommerce
+    // squad even if the model drifts.
+    const agents = ECOMMERCE_ROSTER.map((base, i) => {
+      const llm = llmAgents[i] || {};
+      return {
+        ...base,
+        name: typeof llm.name === 'string' && llm.name.trim() ? llm.name.trim() : base.name,
+        tone: typeof llm.tone === 'string' && llm.tone.trim() ? llm.tone.trim() : base.tone,
+        description:
+          typeof llm.description === 'string' && llm.description.trim()
+            ? llm.description.trim()
+            : base.description,
+      };
+    });
 
     return NextResponse.json({ agents, source: 'llm' });
   } catch (err) {
     console.error('Agent generation error:', err);
-    return NextResponse.json({
-      agents: getDefaultAgents(businessType, goals),
-      source: 'fallback',
-    });
+    return NextResponse.json({ agents: ECOMMERCE_ROSTER, source: 'fallback' });
   }
-}
-
-// ── Fallback agents per business type ─────────────────────────────────────────
-
-function getDefaultAgents(businessType: string, goals: string[]): any[] {
-  const goalText = goals[0] || '';
-  const defaults: Record<string, any[]> = {
-    ecommerce: [
-      { name: 'Sophie', role: 'Spécialiste Produit', designation: 'SPEC-01', description: 'Optimise votre catalogue et vos fiches produit.', capabilities: ['Catalogue', 'Prix', 'Vente croisée', 'SEO produit'], tone: 'Professionnel', personality: 'Analytique et orientée résultats.' },
-      { name: 'Marcus', role: 'Gestionnaire Stock', designation: 'SPEC-02', description: 'Anticipe les ruptures et automatise les réapprovisionnements.', capabilities: ['Alertes stock', 'Réapprovisionnement', 'Prévisions', 'Fournisseurs'], tone: 'Direct', personality: 'Rigoureux et proactif.' },
-      { name: 'Léa', role: 'Créatrice de Contenu', designation: 'SPEC-03', description: 'Génère du contenu engageant pour votre boutique.', capabilities: ['Descriptions', 'Blog', 'Email', 'Réseaux sociaux'], tone: 'Créatif', personality: 'Créative et à l\'écoute de votre marque.' },
-    ],
-    agency: [
-      { name: 'Thomas', role: 'Chef de Projet', designation: 'SPEC-01', description: 'Coordonne vos projets et envoie des rapports d\'avancement.', capabilities: ['Suivi projets', 'Rapports', 'Jalons', 'Alertes'], tone: 'Professionnel', personality: 'Organisé et fiable.' },
-      { name: 'Clara', role: 'Gestionnaire CRM', designation: 'SPEC-02', description: 'Gère votre pipeline commercial et automatise les relances.', capabilities: ['Pipeline', 'Relances', 'Devis', 'Contrats'], tone: 'Chaleureux', personality: 'Orientée relation client.' },
-      { name: 'Raphaël', role: 'Analyste Performance', designation: 'SPEC-03', description: 'Analyse vos métriques clés et produit des rapports.', capabilities: ['Métriques', 'Rapports', 'ROI', 'Dashboards'], tone: 'Analytique', personality: 'Précis et orienté data.' },
-    ],
-  };
-
-  return defaults[businessType] || [
-    { name: 'Alex', role: 'Chef des Opérations', designation: 'SPEC-01', description: `Coordonne vos opérations et ${goalText.toLowerCase() || 'optimise votre productivité'}.`, capabilities: ['Coordination', 'Automatisation', 'Rapports', 'Alertes'], tone: 'Professionnel', personality: 'Stratégique et proactif.' },
-    { name: 'Marie', role: 'Gestionnaire Relations', designation: 'SPEC-02', description: 'Gère vos communications et suit vos clients.', capabilities: ['CRM', 'Emails', 'Suivi', 'Relances'], tone: 'Chaleureux', personality: 'Empathique et réactive.' },
-    { name: 'Lucas', role: 'Analyste Data', designation: 'SPEC-03', description: 'Analyse vos données et génère des insights actionnables.', capabilities: ['Analytics', 'Rapports', 'KPIs', 'Tendances'], tone: 'Analytique', personality: 'Méthodique et orienté résultats.' },
-  ];
 }

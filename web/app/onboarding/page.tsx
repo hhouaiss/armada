@@ -4,26 +4,25 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
-  Shield, Bot, Check, ChevronLeft, ShoppingBag, Briefcase,
-  Code2, UtensilsCrossed, User, Home, Heart, GraduationCap,
-  Sparkles, Loader2, ArrowRight, Wrench, Building2, Pen,
-  Target, Zap, BarChart2, Mail, Users, RefreshCw,
+  Shield, Bot, Check, ChevronLeft, Sparkles, Loader2, ArrowRight,
+  Zap, RefreshCw, Store, Package, Mail, Search, Heart, BarChart2,
+  MessageSquare, Tag, Megaphone,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface BusinessForm {
+interface StoreForm {
   name: string;
-  type: string;
+  storeDomain: string;
   description: string;
-  teamSize: string;
 }
 
 interface GeneratedAgent {
   name: string;
   role: string;
   designation: string;
+  type: string;
   description: string;
   capabilities: string[];
   tone: string;
@@ -35,43 +34,23 @@ interface GeneratedAgent {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const BUSINESS_TYPES = [
-  { id: 'ecommerce',  label: 'E-commerce',       icon: ShoppingBag },
-  { id: 'agency',     label: 'Agence',            icon: Briefcase },
-  { id: 'saas',       label: 'SaaS / Tech',       icon: Code2 },
-  { id: 'restaurant', label: 'Restaurant',        icon: UtensilsCrossed },
-  { id: 'freelance',  label: 'Freelance',         icon: User },
-  { id: 'realestate', label: 'Immobilier',        icon: Home },
-  { id: 'health',     label: 'Santé / Bien-être', icon: Heart },
-  { id: 'education',  label: 'Formation',         icon: GraduationCap },
-  { id: 'consulting', label: 'Consulting',        icon: Building2 },
-  { id: 'artisan',    label: 'Artisan / Créatif', icon: Pen },
-  { id: 'other',      label: 'Autre',             icon: Sparkles },
-];
-
-const TEAM_SIZES = [
-  { id: 'solo',    label: 'Solo' },
-  { id: '2-10',    label: '2–10' },
-  { id: '10-50',   label: '10–50' },
-  { id: '50+',     label: '50+' },
-];
-
+// Ecommerce store-operator goals (replaces the old generalist objectives).
 const GOAL_OPTIONS = [
-  { id: 'emails',    label: 'Réduire le temps passé sur les emails',        icon: Mail },
-  { id: 'content',   label: 'Générer du contenu régulièrement',             icon: Pen },
-  { id: 'sales',     label: 'Suivre mes ventes et alertes',                 icon: BarChart2 },
-  { id: 'clients',   label: 'Coordonner mes clients et projets',            icon: Users },
-  { id: 'analytics', label: 'Analyser mes données et performances',         icon: BarChart2 },
-  { id: 'automate',  label: 'Automatiser mes tâches répétitives',           icon: Zap },
-  { id: 'growth',    label: 'Accélérer ma croissance',                      icon: Target },
-  { id: 'tools',     label: 'Mieux organiser mes outils et processus',      icon: Wrench },
+  { id: 'restock',  label: 'Ne plus jamais être en rupture de stock',        icon: Package },
+  { id: 'cart',     label: 'Récupérer les paniers abandonnés',               icon: Mail },
+  { id: 'seo',      label: 'Améliorer le SEO produit & collections',         icon: Search },
+  { id: 'winback',  label: 'Reconquérir mes clients inactifs',               icon: Heart },
+  { id: 'briefing', label: 'Recevoir un briefing ventes & ops quotidien',    icon: BarChart2 },
+  { id: 'support',  label: 'Accélérer mon support client',                   icon: MessageSquare },
+  { id: 'margins',  label: 'Optimiser mes prix & marges',                    icon: Tag },
+  { id: 'launch',   label: 'Lancer & merchandiser mes produits plus vite',   icon: Megaphone },
 ];
 
 const ANALYSIS_STEPS = [
-  'Lecture du profil business…',
-  'Analyse des objectifs…',
-  'Identification des besoins opérationnels…',
-  'Composition de l\'équipe optimale…',
+  'Lecture de votre boutique…',
+  'Analyse de vos objectifs e-commerce…',
+  'Identification des opérations à automatiser…',
+  'Composition de votre escouade…',
   'Finalisation des agents…',
 ];
 
@@ -83,6 +62,8 @@ const TONES: Record<string, string> = {
   'Créatif':       'bg-pink-500/10 text-pink-400 border-pink-500/20',
 };
 
+const STORAGE_KEY = 'armada_onboarding';
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function OnboardingPage() {
@@ -92,15 +73,34 @@ export default function OnboardingPage() {
   const [analysisStep, setAnalysisStep] = useState(0);
   const [generatedAgents, setGeneratedAgents] = useState<GeneratedAgent[]>([]);
   const [generationSource, setGenerationSource] = useState<'llm' | 'fallback'>('llm');
+  const [connectedStoreId, setConnectedStoreId] = useState<string | null>(null);
 
-  const [form, setForm] = useState<BusinessForm>({
+  const [form, setForm] = useState<StoreForm>({
     name: '',
-    type: '',
+    storeDomain: '',
     description: '',
-    teamSize: '',
   });
   const [goals, setGoals] = useState<string[]>([]);
   const [customGoal, setCustomGoal] = useState('');
+
+  // ── Resume after Shopify OAuth (callback redirects to /onboarding?connected=<id>) ──
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    if (!connected) return;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.form) setForm(prev => ({ ...prev, ...parsed.form }));
+        if (Array.isArray(parsed.goals)) setGoals(parsed.goals);
+        if (typeof parsed.customGoal === 'string') setCustomGoal(parsed.customGoal);
+      }
+    } catch { /* ignore corrupt cache */ }
+    setConnectedStoreId(connected);
+    setStep(2); // skip straight to goals — the store is connected
+    window.history.replaceState({}, '', '/onboarding');
+  }, []);
 
   // ── Analysis animation ──
   useEffect(() => {
@@ -114,9 +114,27 @@ export default function OnboardingPage() {
     return () => clearInterval(interval);
   }, [step]);
 
-  // ── Generate agents via LLM ──
+  // ── Persist progress before leaving for Shopify OAuth ──
+  const persistProgress = useCallback((nextForm: StoreForm) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ form: nextForm, goals, customGoal }));
+    } catch { /* storage may be unavailable */ }
+  }, [goals, customGoal]);
+
+  // ── Connect Shopify store ──
+  const handleConnectStore = () => {
+    let shop = form.storeDomain.trim().toLowerCase();
+    if (!shop) return;
+    if (!shop.includes('.')) shop = `${shop}.myshopify.com`;
+    const nextForm = { ...form, storeDomain: shop };
+    setForm(nextForm);
+    persistProgress(nextForm);
+    window.location.href = `/api/shopify/install?shop=${encodeURIComponent(shop)}&from=onboarding`;
+  };
+
+  // ── Generate squad (canonical ecommerce roster, personalized) ──
   const generateAgents = useCallback(async () => {
-    setStep(3); // show analysis animation
+    setStep(3);
     setAnalysisStep(0);
 
     const allGoals = [...goals, ...(customGoal.trim() ? [customGoal.trim()] : [])];
@@ -126,11 +144,10 @@ export default function OnboardingPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          businessType: form.type,
           businessName: form.name,
           description: form.description,
+          storeDomain: form.storeDomain,
           goals: allGoals,
-          teamSize: form.teamSize,
         }),
       });
       const data = await res.json();
@@ -145,21 +162,21 @@ export default function OnboardingPage() {
     setStep(4);
   }, [form, goals, customGoal]);
 
-  // ── Deploy team ──
+  // ── Deploy squad ──
   const handleDeploy = async () => {
     setIsSubmitting(true);
     try {
-      // 1. Mark onboarding complete
+      // 1. Mark onboarding complete + record store name
       await fetch('/api/onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: form.name,
-          businessType: form.type,
           selectedAgents: generatedAgents.map((a, i) => ({
             id: `gen-${i}`,
             name: a.editedName || a.name,
             role: a.editedRole || a.role,
+            type: a.type,
             designation: a.designation,
             capabilities: a.capabilities,
             tone: a.tone,
@@ -167,6 +184,19 @@ export default function OnboardingPage() {
           })),
         }),
       });
+
+      // 2. If a store is connected, provision the full ecommerce squad for it.
+      //    (Shopify callback already created product/inventory/support; this
+      //    adds growth/finance/ads/cx idempotently.)
+      if (connectedStoreId) {
+        await fetch('/api/agents/provision-departments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId: connectedStoreId }),
+        });
+      }
+
+      localStorage.removeItem(STORAGE_KEY);
       router.push('/hq');
     } catch {
       setIsSubmitting(false);
@@ -188,8 +218,9 @@ export default function OnboardingPage() {
   };
 
   // ── Step validators ──
-  const canGoToGoals = form.type !== '';
-  const canGenerate  = goals.length > 0 || customGoal.trim() !== '';
+  const canContinueStore = form.name.trim() !== '';
+  const canConnect       = form.storeDomain.trim() !== '';
+  const canGenerate      = goals.length > 0 || customGoal.trim() !== '';
 
   return (
     <div
@@ -233,7 +264,8 @@ export default function OnboardingPage() {
                 armada
               </h1>
               <p className="text-[var(--armada-text)]/60 leading-relaxed">
-                Déployez votre équipe d'agents IA en 4 minutes. Ils travaillent pour vous, 24h/24.
+                L'équipe d'agents IA qui fait tourner votre boutique Shopify — stock, SEO,
+                marketing, support et finances. 24h/24.
               </p>
             </div>
             <div className="space-y-3">
@@ -242,7 +274,7 @@ export default function OnboardingPage() {
                 className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full text-white font-medium transition-all hover:opacity-90"
                 style={{ backgroundColor: 'var(--armada-primary)' }}
               >
-                Commencer la mission
+                Connecter ma boutique
                 <ArrowRight className="h-4 w-4" />
               </button>
               <p className="text-[10px] font-mono text-[var(--armada-text)]/30 uppercase tracking-widest">
@@ -252,10 +284,10 @@ export default function OnboardingPage() {
           </motion.div>
         )}
 
-        {/* ── Step 1: Business profile ─────────────────────────── */}
+        {/* ── Step 1: Store connection ─────────────────────────── */}
         {step === 1 && (
           <motion.div
-            key="business"
+            key="store"
             initial={{ opacity: 0, x: 30 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -30 }}
@@ -271,89 +303,80 @@ export default function OnboardingPage() {
 
             <div>
               <div className="text-[10px] font-mono text-[var(--armada-text)]/30 uppercase tracking-widest mb-1">Étape 1 / 3</div>
-              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Votre business</h2>
-              <p className="text-sm text-[var(--armada-text)]/50 mt-1">Pour créer une équipe adaptée à vos besoins réels.</p>
+              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Votre boutique</h2>
+              <p className="text-sm text-[var(--armada-text)]/50 mt-1">
+                Connectez Shopify pour que votre escouade agisse sur vos vraies données.
+              </p>
             </div>
 
-            {/* Business name */}
+            {/* Store name */}
             <div className="space-y-1.5">
               <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">
-                Nom de votre entreprise <span className="text-[var(--armada-primary)]">*</span>
+                Nom de votre boutique <span className="text-[var(--armada-primary)]">*</span>
               </label>
               <input
                 type="text"
                 value={form.name}
                 onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-                placeholder="Ex: Studio Pixel, La Boulangerie du Coin…"
+                placeholder="Ex: Maison Lumière, Atelier Nord…"
                 className="w-full px-4 py-3 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 focus:ring-2 focus:ring-[var(--armada-primary)]/10 transition-colors"
                 style={{ backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }}
               />
             </div>
 
-            {/* Business type */}
-            <div className="space-y-2">
-              <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">
-                Type d'activité <span className="text-[var(--armada-primary)]">*</span>
-              </label>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {BUSINESS_TYPES.map(bt => (
-                  <button
-                    key={bt.id}
-                    onClick={() => setForm(p => ({ ...p, type: bt.id }))}
-                    className={cn(
-                      'flex flex-col items-center gap-1.5 p-3 rounded-xl border text-xs font-mono transition-all',
-                      form.type === bt.id
-                        ? 'border-[var(--armada-primary)] text-[var(--armada-text)]'
-                        : 'border-[var(--armada-accent)]/50 text-[var(--armada-text)]/50 hover:border-[var(--armada-primary)]/30 hover:text-[var(--armada-text)]'
-                    )}
-                    style={form.type === bt.id ? {
-                      backgroundColor: 'color-mix(in srgb, var(--armada-primary) 8%, var(--armada-surface))',
-                    } : { backgroundColor: 'var(--armada-surface)' }}
-                  >
-                    <bt.icon className="h-4 w-4" />
-                    <span className="text-[10px] text-center leading-tight">{bt.label}</span>
-                    {form.type === bt.id && (
-                      <Check className="h-2.5 w-2.5 absolute" style={{ color: 'var(--armada-primary)' }} />
-                    )}
-                  </button>
-                ))}
+            {/* Shopify connection */}
+            {connectedStoreId ? (
+              <div
+                className="flex items-center gap-3 px-4 py-3.5 rounded-xl border border-green-500/30"
+                style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, var(--armada-surface))' }}
+              >
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-green-500/15">
+                  <Check className="h-4 w-4 text-green-500" />
+                </div>
+                <div>
+                  <div className="text-sm text-[var(--armada-text)]">Boutique Shopify connectée</div>
+                  <div className="text-[11px] font-mono text-[var(--armada-text)]/40">{form.storeDomain || 'connectée'}</div>
+                </div>
               </div>
-            </div>
-
-            {/* Team size */}
-            <div className="space-y-2">
-              <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">Taille d'équipe</label>
-              <div className="flex gap-2">
-                {TEAM_SIZES.map(ts => (
+            ) : (
+              <div className="space-y-1.5">
+                <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">
+                  Domaine Shopify
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={form.storeDomain}
+                    onChange={e => setForm(p => ({ ...p, storeDomain: e.target.value }))}
+                    placeholder="ma-boutique.myshopify.com"
+                    className="flex-1 px-4 py-3 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 focus:ring-2 focus:ring-[var(--armada-primary)]/10 transition-colors"
+                    style={{ backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }}
+                  />
                   <button
-                    key={ts.id}
-                    onClick={() => setForm(p => ({ ...p, teamSize: ts.id }))}
-                    className={cn(
-                      'flex-1 py-2 rounded-xl border text-xs font-mono transition-all',
-                      form.teamSize === ts.id
-                        ? 'border-[var(--armada-primary)] text-[var(--armada-text)]'
-                        : 'border-[var(--armada-accent)]/50 text-[var(--armada-text)]/50 hover:border-[var(--armada-primary)]/30 hover:text-[var(--armada-text)]'
-                    )}
-                    style={form.teamSize === ts.id
-                      ? { backgroundColor: 'color-mix(in srgb, var(--armada-primary) 8%, var(--armada-surface))' }
-                      : { backgroundColor: 'var(--armada-surface)' }
-                    }
+                    onClick={handleConnectStore}
+                    disabled={!canConnect}
+                    className="flex items-center gap-2 px-4 py-3 rounded-xl text-white text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                    style={{ backgroundColor: 'var(--armada-primary)' }}
                   >
-                    {ts.label}
+                    <Store className="h-4 w-4" />
+                    Connecter
                   </button>
-                ))}
+                </div>
+                <p className="text-[11px] text-[var(--armada-text)]/35">
+                  Vous serez redirigé vers Shopify pour autoriser l'accès, puis ramené ici.
+                </p>
               </div>
-            </div>
+            )}
 
             {/* Description (optional) */}
             <div className="space-y-1.5">
               <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">
-                Description (optionnel)
+                Ce que vous vendez (optionnel)
               </label>
               <textarea
                 value={form.description}
                 onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-                placeholder="Ex: Boutique de vêtements éthiques pour femmes 25-40 ans…"
+                placeholder="Ex: Vêtements éthiques pour femmes 25-40 ans, ~120 références…"
                 rows={2}
                 className="w-full px-4 py-3 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 resize-none transition-colors"
                 style={{ backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }}
@@ -361,14 +384,24 @@ export default function OnboardingPage() {
             </div>
 
             <button
-              onClick={() => canGoToGoals && setStep(2)}
-              disabled={!canGoToGoals}
+              onClick={() => canContinueStore && setStep(2)}
+              disabled={!canContinueStore}
               className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full text-white font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ backgroundColor: 'var(--armada-primary)' }}
             >
               Continuer
               <ArrowRight className="h-4 w-4" />
             </button>
+
+            {!connectedStoreId && (
+              <button
+                onClick={() => canContinueStore && setStep(2)}
+                disabled={!canContinueStore}
+                className="w-full text-center text-xs text-[var(--armada-text)]/35 hover:text-[var(--armada-text)]/60 transition-colors disabled:opacity-40"
+              >
+                Je connecterai Shopify plus tard
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -391,9 +424,9 @@ export default function OnboardingPage() {
 
             <div>
               <div className="text-[10px] font-mono text-[var(--armada-text)]/30 uppercase tracking-widest mb-1">Étape 2 / 3</div>
-              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Vos objectifs</h2>
+              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Vos priorités</h2>
               <p className="text-sm text-[var(--armada-text)]/50 mt-1">
-                Qu'est-ce que vous voulez accomplir avec votre équipe IA ?
+                Qu'est-ce qui ferait le plus de différence sur votre boutique ?
                 <span className="text-[var(--armada-text)]/30"> (max 3)</span>
               </p>
             </div>
@@ -441,13 +474,13 @@ export default function OnboardingPage() {
             {/* Custom goal */}
             <div className="space-y-1.5">
               <label className="text-xs font-mono text-[var(--armada-text)]/50 uppercase tracking-wider">
-                Autre objectif (optionnel)
+                Autre priorité (optionnel)
               </label>
               <input
                 type="text"
                 value={customGoal}
                 onChange={e => setCustomGoal(e.target.value)}
-                placeholder="Décrivez votre besoin spécifique…"
+                placeholder="Décrivez un besoin spécifique à votre boutique…"
                 className="w-full px-4 py-3 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 focus:ring-2 focus:ring-[var(--armada-primary)]/10 transition-colors"
                 style={{ backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }}
               />
@@ -459,7 +492,7 @@ export default function OnboardingPage() {
               className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full text-white font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ backgroundColor: 'var(--armada-primary)' }}
             >
-              Créer mon équipe IA
+              Composer mon escouade
               <Sparkles className="h-4 w-4" />
             </button>
           </motion.div>
@@ -492,8 +525,8 @@ export default function OnboardingPage() {
             </div>
 
             <div>
-              <h2 className="font-serif text-2xl text-[var(--armada-text)] mb-2">Le Major analyse…</h2>
-              <p className="text-sm text-[var(--armada-text)]/50">Composition de votre équipe optimale</p>
+              <h2 className="font-serif text-2xl text-[var(--armada-text)] mb-2">Le Major compose votre escouade…</h2>
+              <p className="text-sm text-[var(--armada-text)]/50">Des agents e-commerce adaptés à votre boutique</p>
             </div>
 
             {/* Steps */}
@@ -531,11 +564,11 @@ export default function OnboardingPage() {
           >
             <div className="text-center">
               <div className="text-[10px] font-mono text-[var(--armada-text)]/30 uppercase tracking-widest mb-1">Étape 3 / 3</div>
-              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Votre équipe est prête</h2>
+              <h2 className="font-serif text-2xl text-[var(--armada-text)]">Votre escouade est prête</h2>
               <p className="text-sm text-[var(--armada-text)]/50 mt-1">
-                {generationSource === 'llm'
-                  ? 'Agents créés sur mesure pour vos objectifs. Modifiez si nécessaire.'
-                  : 'Équipe générée. Modifiez les noms et rôles selon vos besoins.'
+                {connectedStoreId
+                  ? 'Agents adaptés à votre boutique. Modifiez les noms si besoin.'
+                  : 'Aperçu de votre escouade. Connectez Shopify depuis le QG pour l\'activer pleinement.'
                 }
               </p>
             </div>
@@ -635,7 +668,7 @@ export default function OnboardingPage() {
                     </>
                   ) : (
                     <>
-                      Déployer mon équipe
+                      Déployer mon escouade
                       <Zap className="h-4 w-4" />
                     </>
                   )}
@@ -646,7 +679,7 @@ export default function OnboardingPage() {
                   className="w-full flex items-center justify-center gap-2 py-2.5 text-sm text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]/70 transition-colors"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
-                  Régénérer l'équipe
+                  Régénérer l'escouade
                 </button>
               </>
             )}

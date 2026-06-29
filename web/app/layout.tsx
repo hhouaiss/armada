@@ -10,18 +10,18 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'Armada HQ — Déployez votre équipe IA',
+  title: 'Armada HQ — L\'équipe IA de votre boutique Shopify',
   description:
-    'Armada orchestre des agents IA autonomes qui automatisent vos opérations métier — recherche, finance, support, marketing. Opérationnel en 5 minutes, sans compétence technique.',
+    'Armada déploie une escouade d\'agents IA qui font tourner votre boutique Shopify — stock, SEO, marketing, support, finances. Opérationnel en 5 minutes, sans compétence technique.',
   keywords: [
-    'agents IA',
-    'automatisation entreprise',
-    'intelligence artificielle',
-    'équipe IA',
-    'automatisation opérations',
-    'agents autonomes',
-    'plateforme agentique',
-    'IA entreprise',
+    'agents IA e-commerce',
+    'automatisation Shopify',
+    'IA boutique Shopify',
+    'agents IA marchand',
+    'gestion boutique IA',
+    'automatisation e-commerce',
+    'plateforme agentique e-commerce',
+    'IA gestion stock',
     'ArmadaOS',
     'Armada HQ',
   ],
@@ -36,16 +36,16 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'fr_FR',
     url: 'https://armada-hq.com',
-    title: 'Armada HQ — Déployez votre équipe IA',
+    title: 'Armada HQ — L\'équipe IA de votre boutique Shopify',
     description:
-      'Des agents IA autonomes qui exécutent vos opérations métier. Votre entreprise tourne, même la nuit.',
+      'Une escouade d\'agents IA qui fait tourner votre boutique Shopify. Stock, SEO, marketing, support — même la nuit.',
     siteName: 'Armada HQ',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Armada HQ — Déployez votre équipe IA',
+    title: 'Armada HQ — L\'équipe IA de votre boutique Shopify',
     description:
-      'Des agents IA autonomes qui exécutent vos opérations métier. Votre entreprise tourne, même la nuit.',
+      'Une escouade d\'agents IA qui fait tourner votre boutique Shopify. Stock, SEO, marketing, support — même la nuit.',
     creator: '@armadahq',
   },
   robots: {

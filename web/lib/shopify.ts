@@ -127,6 +127,11 @@ export class ShopifyClient {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/orders/count.json${query ? `?${query}` : ''}`);
   }
+
+  // Shop
+  async getShopInfo(): Promise<{ shop: any }> {
+    return this.request('/shop.json');
+  }
 }
 
 // OAuth helpers

@@ -28,11 +28,11 @@ interface DeptConfig {
 const DEPT_CONFIGS: Record<string, DeptConfig> = {
   boutique:  { label: 'Boutique',         color: '#6366f1', Icon: Package,     designation: (i) => `SHP-0${i+1}` },
   content:   { label: 'Contenu & SEO',    color: '#10b981', Icon: Globe,       designation: (i) => `CNT-0${i+1}` },
-  growth:    { label: 'Croissance',       color: '#8b5cf6', Icon: TrendingUp,  designation: (i) => `GRW-0${i+1}` },
+  growth:    { label: 'Acquisition & SEO',color: '#8b5cf6', Icon: TrendingUp,  designation: (i) => `GRW-0${i+1}` },
   marketing: { label: 'Marketing & Ads',  color: '#f59e0b', Icon: Megaphone,   designation: (i) => `MKT-0${i+1}` },
-  finance:   { label: 'Finance & Data',   color: '#06b6d4', Icon: BarChart2,   designation: (i) => `FIN-0${i+1}` },
+  finance:   { label: 'Finance & Analytics',color: '#06b6d4', Icon: BarChart2, designation: (i) => `FIN-0${i+1}` },
   cx:        { label: 'CX & Fidélisation',color: '#ec4899', Icon: Heart,       designation: (i) => `CX-0${i+1}` },
-  ops:       { label: 'Équipe',           color: '#94a3b8', Icon: Users,       designation: (i) => `OPS-0${i+1}` },
+  ops:       { label: 'Opérations',       color: '#94a3b8', Icon: Users,       designation: (i) => `OPS-0${i+1}` },
 };
 
 function getDept(type: string): string {
@@ -137,6 +137,12 @@ export default function CommandCenterPage() {
     { refreshInterval: 60000 }
   );
 
+  const { data: metricsData, isLoading: metricsLoading } = useSWR(
+    activeStoreId ? `/api/metrics/store?storeId=${activeStoreId}` : null,
+    fetcher,
+    { refreshInterval: 120000 }
+  );
+
   const agents: any[]     = agentsData?.agents || [];
   const operations: any[] = opsData?.operations || [];
   const departments: any[] = deptData?.departments || [];
@@ -158,6 +164,19 @@ export default function CommandCenterPage() {
   const efficiency   = completedOps.length + failedOps.length > 0
     ? Math.round(completedOps.length / (completedOps.length + failedOps.length) * 100)
     : null;
+
+  // Ecommerce KPIs (from the connected Shopify store)
+  const m = metricsData?.metrics;
+  const fmtMoney = (n: number, currency = 'EUR') => {
+    try {
+      return new Intl.NumberFormat('fr-FR', {
+        style: 'currency', currency, maximumFractionDigits: 0,
+      }).format(n);
+    } catch {
+      return `${Math.round(n)} ${currency}`;
+    }
+  };
+  const stockAlerts = m ? (m.outOfStock || 0) + (m.lowStock || 0) : 0;
 
   // Build enriched member objects
   const buildMember = (agent: any) => {
@@ -246,9 +265,11 @@ export default function CommandCenterPage() {
 
           <div className="flex items-center gap-4 md:gap-6 flex-wrap">
             {[
-              { label: 'Tâches / 24h', value: agentsLoading ? '—' : String(totalTasks), icon: Zap },
-              { label: 'Temps gagné',  value: agentsLoading ? '—' : `${timeSaved}h`,    icon: Clock },
-              { label: 'Efficacité',   value: agentsLoading ? '—' : efficiency !== null ? `${efficiency}%` : '—', icon: TrendingUp },
+              { label: 'CA 7 jours',    value: metricsLoading ? '—' : m ? fmtMoney(m.revenue7d, m.currency) : '—', icon: TrendingUp },
+              { label: 'Commandes 7j',  value: metricsLoading ? '—' : m ? String(m.orders7d) : '—',                icon: Package },
+              { label: 'Panier moyen',  value: metricsLoading ? '—' : m ? fmtMoney(m.aov7d, m.currency) : '—',     icon: BarChart2 },
+              { label: 'Alertes stock', value: metricsLoading ? '—' : m ? String(stockAlerts) : '—',              icon: AlertTriangle },
+              { label: 'Tâches / 24h',  value: agentsLoading ? '—' : String(totalTasks),                          icon: Zap },
             ].map(s => (
               <div key={s.label} className="flex items-center gap-2">
                 <s.icon className="h-3.5 w-3.5 text-[var(--armada-text)]/30" />

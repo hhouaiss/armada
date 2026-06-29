@@ -14,6 +14,9 @@ import {
   Menu,
   X,
   Target,
+  Store,
+  Package,
+  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
@@ -27,6 +30,14 @@ const navGroups = [
       { name: 'Quartier Général', href: '/hq', icon: LayoutDashboard },
       { name: 'Mission Control', href: '/objectives', icon: Target },
       { name: 'Livrables', href: '/livrables', icon: Inbox },
+    ],
+  },
+  {
+    label: 'Boutique',
+    items: [
+      { name: 'Boutiques', href: '/stores', icon: Store },
+      { name: 'Stock', href: '/inventory', icon: Package },
+      { name: 'Clients', href: '/customers', icon: Users },
     ],
   },
   {

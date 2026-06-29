@@ -5,6 +5,8 @@ import crypto from 'crypto';
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const shop = searchParams.get('shop');
+  // Where to return after OAuth — set to 'onboarding' so the callback resumes the flow.
+  const origin = searchParams.get('from') === 'onboarding' ? 'onboarding' : 'hq';
 
   if (!shop) {
     return NextResponse.json({ error: 'Missing shop parameter' }, { status: 400 });
@@ -32,6 +34,14 @@ export async function GET(request: NextRequest) {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     maxAge: 600, // 10 minutes
+    sameSite: 'lax',
+  });
+
+  // Remember where to return after OAuth (onboarding resume vs. dashboard).
+  response.cookies.set('shopify_connect_origin', origin, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 600,
     sameSite: 'lax',
   });
 

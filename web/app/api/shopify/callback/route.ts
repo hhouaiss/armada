@@ -117,9 +117,13 @@ export async function GET(request: NextRequest) {
       console.warn('⚠️  Could not notify gateway of new store:', err);
     }
 
-    // Redirect to HQ
-    const response = NextResponse.redirect(new URL('/hq', request.url));
+    // Redirect: resume onboarding if the connect was initiated there, else HQ.
+    const origin = request.cookies.get('shopify_connect_origin')?.value;
+    const destination =
+      origin === 'onboarding' ? `/onboarding?connected=${store.id}` : '/hq';
+    const response = NextResponse.redirect(new URL(destination, request.url));
     response.cookies.delete('shopify_oauth_state');
+    response.cookies.delete('shopify_connect_origin');
 
     return response;
   } catch (error) {
