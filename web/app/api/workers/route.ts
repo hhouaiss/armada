@@ -15,7 +15,12 @@ export async function GET(request: NextRequest) {
       where: {
         storeId,
         type: 'meta',
-        key: { in: ['kairos_last_tick', 'kairos_enabled', 'dream_last_run', 'dream_enabled'] },
+        key: {
+          in: [
+            'kairos_last_tick', 'kairos_enabled', 'kairos_thresholds', 'kairos_baseline',
+            'dream_last_run', 'dream_enabled',
+          ],
+        },
       },
     });
 
@@ -33,7 +38,8 @@ export async function GET(request: NextRequest) {
 
     const get = (key: string) => metaRecords.find(r => r.key === key)?.content ?? null;
 
-    // Parse dream logs — extract counts + summary from markdown
+    // Parse dream logs — extract counts + summary from markdown.
+    // `content` carries the full markdown so the UI can show the complete report.
     const parsedLogs = dreamLogs.map((log) => {
       const date = log.key.replace('dream_log/', '');
       const decisionsMatch = log.content.match(/## Décisions ajoutées \((\d+)\)/);
@@ -47,14 +53,27 @@ export async function GET(request: NextRequest) {
         factsCount:        parseInt(factsMatch?.[1] ?? '0', 10),
         hasContradictions: !!contradMatch,
         summary:           summaryMatch?.[1]?.trim() ?? null,
+        content:           log.content,
         ranAt:             log.updatedAt.toISOString(),
       };
     });
 
+    // Thresholds / baseline are written by the KAIROS worker as JSON blobs
+    const parseJson = <T,>(raw: string | null): T | null => {
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return null;
+      }
+    };
+
     return NextResponse.json({
       kairos: {
-        enabled:  get('kairos_enabled') !== 'false',   // defaults to true if not set
-        lastTick: get('kairos_last_tick'),
+        enabled:    get('kairos_enabled') !== 'false',   // defaults to true if not set
+        lastTick:   get('kairos_last_tick'),
+        thresholds: parseJson<Record<string, unknown>>(get('kairos_thresholds')),
+        baseline:   parseJson<Record<string, unknown>>(get('kairos_baseline')),
       },
       autoDream: {
         enabled:    get('dream_enabled') !== 'false',  // defaults to true if not set

@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import useSWR from 'swr';
 import {
   MessageSquare, Activity, Bot, Settings, Shield, Loader2,
   Zap, Clock, TrendingUp, Radio, ChevronRight,
   AlertTriangle, CheckCircle2, Package, Users,
-  BarChart2, Megaphone, Heart, Globe, Plus,
+  BarChart2, Megaphone, Heart, Globe, Plus, X,
 } from 'lucide-react';
 import { useGateway } from '@/lib/hooks/useGateway';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
@@ -626,13 +627,31 @@ function nextDreamRun(): string {
   return `dans ${h}h${m > 0 ? ` ${m}min` : ''}`;
 }
 
+interface DreamLog {
+  date: string;
+  decisionsCount: number;
+  factsCount: number;
+  hasContradictions: boolean;
+  summary: string | null;
+  content: string | null;
+  ranAt: string;
+}
+
+interface KairosState {
+  enabled: boolean;
+  lastTick: string | null;
+  thresholds?: Record<string, any> | null;
+  baseline?: Record<string, any> | null;
+}
+
 function WorkersSection({ kairos, autoDream, storeId, onToggle }: {
-  kairos:    { enabled: boolean; lastTick: string | null };
-  autoDream: { enabled: boolean; lastRun: string | null; recentLogs: Array<{ date: string; decisionsCount: number; factsCount: number; hasContradictions: boolean; summary: string | null; ranAt: string }> };
+  kairos:    KairosState;
+  autoDream: { enabled: boolean; lastRun: string | null; recentLogs: DreamLog[] };
   storeId:   string;
   onToggle:  () => void;
 }) {
   const lastLog = autoDream.recentLogs[0] ?? null;
+  const [openDaemon, setOpenDaemon] = useState<'kairos' | 'autoDream' | null>(null);
 
   async function toggleWorker(worker: 'kairos' | 'autoDream', enabled: boolean) {
     await fetch('/api/workers', {
@@ -672,6 +691,7 @@ function WorkersSection({ kairos, autoDream, storeId, onToggle }: {
           <p className="text-[10px] font-mono text-[var(--armada-text)]/40">
             {kairos.enabled ? `Prochain scan : ${nextKairosTick(kairos.lastTick)}` : 'Surveillance désactivée'}
           </p>
+          <MoreInfoButton onClick={() => setOpenDaemon('kairos')} />
         </div>
 
         {/* AutoDream */}
@@ -700,7 +720,7 @@ function WorkersSection({ kairos, autoDream, storeId, onToggle }: {
                 {lastLog.hasContradictions && ' ⚠️'}
               </p>
               {lastLog.summary && (
-                <p className="text-[10px] text-[var(--armada-text)]/30 truncate">{lastLog.summary}</p>
+                <p className="text-[10px] text-[var(--armada-text)]/30 line-clamp-2">{lastLog.summary}</p>
               )}
             </div>
           ) : (
@@ -708,8 +728,334 @@ function WorkersSection({ kairos, autoDream, storeId, onToggle }: {
               {autoDream.enabled ? `Prochain : ${nextDreamRun()}` : 'Planification nocturne désactivée'}
             </p>
           )}
+          <MoreInfoButton onClick={() => setOpenDaemon('autoDream')} />
         </div>
       </div>
+
+      <DaemonModal
+        open={openDaemon === 'kairos'}
+        onClose={() => setOpenDaemon(null)}
+        title="KAIROS"
+        subtitle="Surveillance temps réel"
+        accent="#22c55e"
+      >
+        <KairosDetails kairos={kairos} />
+      </DaemonModal>
+
+      <DaemonModal
+        open={openDaemon === 'autoDream'}
+        onClose={() => setOpenDaemon(null)}
+        title="AutoDream"
+        subtitle="Consolidation mémoire + planification"
+        accent="var(--armada-primary)"
+      >
+        <AutoDreamDetails autoDream={autoDream} />
+      </DaemonModal>
+    </div>
+  );
+}
+
+// ── Daemon detail modal ────────────────────────────────────────────────────────
+
+function MoreInfoButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--armada-text)]/40 hover:text-[var(--armada-text)] transition-colors group/info"
+    >
+      Plus d&apos;infos
+      <ChevronRight className="w-3 h-3 transition-transform group-hover/info:translate-x-0.5" />
+    </button>
+  );
+}
+
+function DaemonModal({ open, onClose, title, subtitle, accent, children }: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle: string;
+  accent: string;
+  children: React.ReactNode;
+}) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Close on Escape and lock body scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={onClose}
+          />
+
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-[var(--armada-accent)]/60 shadow-2xl overflow-hidden"
+            style={{ backgroundColor: 'var(--armada-surface)' }}
+          >
+            <div className="h-0.5 w-full flex-shrink-0" style={{ backgroundColor: accent, opacity: 0.6 }} />
+
+            {/* Header */}
+            <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-[var(--armada-accent)]/40 flex-shrink-0">
+              <div className="min-w-0">
+                <div className="text-sm font-mono font-medium text-[var(--armada-text)]">{title}</div>
+                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--armada-text)]/40 mt-0.5">
+                  {subtitle}
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                aria-label="Fermer"
+                className="flex items-center justify-center w-7 h-7 rounded-full border border-[var(--armada-accent)] text-[var(--armada-text)]/50 hover:text-[var(--armada-text)] hover:bg-[var(--armada-surface-hover)] transition flex-shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto px-5 py-4 space-y-5">{children}</div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>,
+    document.body
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-1.5 border-b border-[var(--armada-accent)]/25 last:border-0">
+      <span className="text-[10px] font-mono uppercase tracking-[0.15em] text-[var(--armada-text)]/40 flex-shrink-0">
+        {label}
+      </span>
+      <span className="text-xs font-mono text-[var(--armada-text)]/80 text-right break-words">{value}</span>
+    </div>
+  );
+}
+
+function DetailBlock({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-3">
+        <span className="text-[9px] font-mono uppercase tracking-[0.25em] text-[var(--armada-text)]/30 flex-shrink-0">
+          {title}
+        </span>
+        <div className="flex-1 h-px bg-[var(--armada-accent)]/40" />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function KairosDetails({ kairos }: { kairos: KairosState }) {
+  const t = kairos.thresholds;
+  const b = kairos.baseline;
+
+  return (
+    <>
+      <p className="text-xs leading-relaxed text-[var(--armada-text)]/60">
+        KAIROS scanne la boutique toutes les 15 minutes (stock, commandes non expédiées, retards de
+        traitement) et vous alerte uniquement lorsqu&apos;une situation sort de l&apos;ordinaire. Il
+        observe et alerte — il ne modifie jamais vos données.
+      </p>
+
+      <DetailBlock title="État">
+        <DetailRow label="Statut" value={kairos.enabled ? 'Actif' : 'Désactivé'} />
+        <DetailRow
+          label="Dernier scan"
+          value={kairos.lastTick
+            ? `${formatTime(kairos.lastTick)} — ${new Date(kairos.lastTick).toLocaleString('fr-FR')}`
+            : 'Jamais exécuté'}
+        />
+        <DetailRow
+          label="Prochain scan"
+          value={kairos.enabled ? nextKairosTick(kairos.lastTick) : '—'}
+        />
+      </DetailBlock>
+
+      <DetailBlock title="Seuils d'alerte">
+        {t ? (
+          <>
+            <DetailRow label="Stock bas" value={`≤ ${t.lowStockUnits} unités`} />
+            <DetailRow label="Retard commande" value={`> ${t.orderDelayHours} h`} />
+            <DetailRow label="Backlog commandes" value={`> ${t.openOrdersAlertCount} en attente`} />
+          </>
+        ) : (
+          <p className="text-[11px] font-mono text-[var(--armada-text)]/30">
+            Seuils par défaut (stock ≤ 5, retard &gt; 48 h, backlog &gt; 50).
+          </p>
+        )}
+      </DetailBlock>
+
+      <DetailBlock title="Baseline (moyenne mobile)">
+        {b ? (
+          <>
+            <DetailRow label="Commandes non expédiées" value={Number(b.avgUnfulfilledOrders ?? 0).toFixed(1)} />
+            <DetailRow label="Commandes en retard" value={Number(b.avgDelayedOrders ?? 0).toFixed(1)} />
+            <DetailRow label="Variants stock bas" value={Number(b.avgLowStockCount ?? 0).toFixed(1)} />
+            <DetailRow
+              label="Échantillons"
+              value={`${b.samplesCount ?? 0}${Number(b.samplesCount ?? 0) < 5 ? ' (en construction)' : ''}`}
+            />
+          </>
+        ) : (
+          <p className="text-[11px] font-mono text-[var(--armada-text)]/30">
+            Pas encore de baseline — elle se construit au fil des scans.
+          </p>
+        )}
+      </DetailBlock>
+    </>
+  );
+}
+
+function AutoDreamDetails({ autoDream }: {
+  autoDream: { enabled: boolean; lastRun: string | null; recentLogs: DreamLog[] };
+}) {
+  const [selectedDate, setSelectedDate] = useState(autoDream.recentLogs[0]?.date ?? null);
+  const selected = autoDream.recentLogs.find(l => l.date === selectedDate) ?? null;
+
+  return (
+    <>
+      <p className="text-xs leading-relaxed text-[var(--armada-text)]/60">
+        Chaque nuit à 3h UTC, AutoDream relit l&apos;activité de la journée, consolide la mémoire des
+        agents (décisions, faits, contradictions) puis prépare le plan stratégique du lendemain.
+      </p>
+
+      <DetailBlock title="État">
+        <DetailRow label="Statut" value={autoDream.enabled ? 'Actif' : 'Désactivé'} />
+        <DetailRow
+          label="Dernier cycle"
+          value={autoDream.lastRun
+            ? `${formatTime(autoDream.lastRun)} — ${new Date(autoDream.lastRun).toLocaleString('fr-FR')}`
+            : 'Jamais exécuté'}
+        />
+        <DetailRow label="Prochain cycle" value={autoDream.enabled ? nextDreamRun() : '—'} />
+      </DetailBlock>
+
+      {autoDream.recentLogs.length === 0 ? (
+        <DetailBlock title="Rapports">
+          <p className="text-[11px] font-mono text-[var(--armada-text)]/30">
+            Aucun rapport pour l&apos;instant — le premier arrivera après le prochain cycle nocturne.
+          </p>
+        </DetailBlock>
+      ) : (
+        <DetailBlock title={`Rapports (${autoDream.recentLogs.length} derniers)`}>
+          {/* Date selector */}
+          <div className="flex flex-wrap gap-1.5 pb-1">
+            {autoDream.recentLogs.map(log => {
+              const active = log.date === selectedDate;
+              return (
+                <button
+                  key={log.date}
+                  onClick={() => setSelectedDate(log.date)}
+                  className={`text-[10px] font-mono px-2.5 py-1 rounded-full border transition-colors ${
+                    active
+                      ? 'border-[var(--armada-primary)]/40 text-[var(--armada-primary)] bg-[var(--armada-primary)]/10'
+                      : 'border-[var(--armada-accent)] text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]/70'
+                  }`}
+                >
+                  {log.date}{log.hasContradictions && ' ⚠️'}
+                </button>
+              );
+            })}
+          </div>
+
+          {selected && (
+            <div className="rounded-xl border border-[var(--armada-accent)]/40 p-4"
+              style={{ backgroundColor: 'var(--armada-bg)' }}>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pb-3 mb-3 border-b border-[var(--armada-accent)]/30">
+                <span className="text-[10px] font-mono text-[var(--armada-text)]/40">
+                  {selected.decisionsCount} décisions
+                </span>
+                <span className="text-[10px] font-mono text-[var(--armada-text)]/40">
+                  {selected.factsCount} faits
+                </span>
+                {selected.hasContradictions && (
+                  <span className="text-[10px] font-mono text-amber-400">Contradictions détectées</span>
+                )}
+                <span className="text-[10px] font-mono text-[var(--armada-text)]/25 ml-auto">
+                  {formatTime(selected.ranAt)}
+                </span>
+              </div>
+              {selected.content
+                ? <MarkdownView source={selected.content} />
+                : (
+                  <p className="text-xs leading-relaxed text-[var(--armada-text)]/70 whitespace-pre-wrap">
+                    {selected.summary || 'Rapport vide.'}
+                  </p>
+                )}
+            </div>
+          )}
+        </DetailBlock>
+      )}
+    </>
+  );
+}
+
+// Minimal renderer for the markdown the workers write (# / ## headings + "- " bullets)
+function MarkdownView({ source }: { source: string }) {
+  const lines = source.split('\n');
+
+  return (
+    <div className="space-y-2">
+      {lines.map((line, i) => {
+        const trimmed = line.trim();
+        if (!trimmed) return null;
+
+        if (trimmed.startsWith('## ')) {
+          return (
+            <div key={i} className="text-[9px] font-mono uppercase tracking-[0.25em] text-[var(--armada-text)]/35 pt-2 first:pt-0">
+              {trimmed.slice(3)}
+            </div>
+          );
+        }
+        if (trimmed.startsWith('# ')) {
+          return (
+            <div key={i} className="text-xs font-mono text-[var(--armada-text)]/50">
+              {trimmed.slice(2)}
+            </div>
+          );
+        }
+        if (trimmed.startsWith('- ')) {
+          return (
+            <div key={i} className="flex gap-2 text-xs leading-relaxed text-[var(--armada-text)]/70">
+              <span className="text-[var(--armada-text)]/25 flex-shrink-0">•</span>
+              <span>{trimmed.slice(2)}</span>
+            </div>
+          );
+        }
+        return (
+          <p key={i} className="text-xs leading-relaxed text-[var(--armada-text)]/70">
+            {trimmed}
+          </p>
+        );
+      })}
     </div>
   );
 }
