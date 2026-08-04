@@ -1280,6 +1280,10 @@ function ApprovalCard({
         {approval.description}
       </p>
 
+      <p className="text-xs text-[var(--armada-text)]/30">
+        Après approbation, l&apos;action s&apos;exécute automatiquement — le résultat apparaît dans le chat de l&apos;agent.
+      </p>
+
       <div className="flex items-center gap-3 pt-1">
         <button
           onClick={() => decide('approved')}

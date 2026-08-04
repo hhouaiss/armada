@@ -63,6 +63,11 @@ import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worke
 import { webBrowseTool } from './tools/web-browse.js';
 import { readObjectivesTool } from './tools/read-objectives.js';
 import { requestApprovalTool, setApprovalTelegramNotifier } from './tools/request-approval.js';
+import {
+  startApprovalExecutor,
+  setApprovalActionNotifier,
+  setApprovalResultNotifier,
+} from './lib/approval-flow.js';
 
 // Load environment variables
 config();
@@ -225,6 +230,14 @@ async function bootstrap() {
       telegram!.sendAlert(storeId, text, hasButtons)
     );
 
+    // Wire gated-tool approvals → Telegram (Approuver/Refuser buttons + result reports)
+    setApprovalActionNotifier((storeId, approvalId, text) =>
+      telegram!.sendApprovalRequest(storeId, approvalId, text)
+    );
+    setApprovalResultNotifier((storeId, text) =>
+      telegram!.sendAlert(storeId, text, false)
+    );
+
     // Wire Mission Control task completion → Telegram notifications
     setMissionTelegramNotifier((storeId, text) =>
       telegram!.sendAlert(storeId, text, false)
@@ -233,6 +246,10 @@ async function bootstrap() {
   } else {
     console.log('⚠️  Telegram integration not configured (optional)\n');
   }
+
+  // Approval executor: runs gated tool calls automatically once approved
+  // (from Mission Control, Telegram, or chat) — checks every 5s
+  startApprovalExecutor({ router, toolRegistry, sessionManager });
 
   // Cleanup sessions + AutoDream schedule check (every 5 minutes)
   setInterval(async () => {

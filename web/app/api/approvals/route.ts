@@ -46,8 +46,10 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'id and decision are required' }, { status: 400 });
     }
 
-    const approval = await prisma.approvalRequest.update({
-      where: { id },
+    // Only pending requests can be decided — prevents re-running an
+    // already-executed action if the endpoint is called twice.
+    const updated = await prisma.approvalRequest.updateMany({
+      where: { id, status: 'pending' },
       data: {
         status: decision,
         decidedAt: new Date(),
@@ -55,6 +57,14 @@ export async function PATCH(request: NextRequest) {
       },
     });
 
+    if (updated.count === 0) {
+      return NextResponse.json(
+        { error: 'Approval already decided or expired' },
+        { status: 409 }
+      );
+    }
+
+    const approval = await prisma.approvalRequest.findUnique({ where: { id } });
     return NextResponse.json({ approval });
   } catch (error) {
     console.error('Error updating approval:', error);

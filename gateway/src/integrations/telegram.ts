@@ -300,7 +300,50 @@ export class TelegramIntegration {
         return;
       }
 
+      // Approval decisions from inline buttons: approval:approve:<id> / approval:reject:<id>
+      const approvalMatch = data?.match(/^approval:(approve|reject):(.+)$/);
+      if (approvalMatch) {
+        const [, decision, approvalId] = approvalMatch;
+        const handled = await this.decideApproval(approvalId, decision === 'approve');
+        await ctx.answerCallbackQuery({
+          text: handled
+            ? decision === 'approve' ? 'Approuvé — exécution en cours…' : 'Refusé.'
+            : 'Demande déjà traitée ou expirée.',
+        });
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+        if (handled) {
+          await ctx.reply(
+            decision === 'approve'
+              ? '✅ Approuvé — l\'action s\'exécute automatiquement. Résultat dans quelques secondes.'
+              : '🚫 Refusé — l\'action ne sera pas exécutée.'
+          );
+        }
+        return;
+      }
+
       await ctx.answerCallbackQuery();
+    });
+
+    // ── Approval text commands: /approve_xxxxxxxx and /reject_xxxxxxxx ───────
+    this.bot.hears(/^\/(approve|reject)_([A-Za-z0-9]+)\s*$/, async (ctx) => {
+      const decision = ctx.match[1] as 'approve' | 'reject';
+      const idSuffix = ctx.match[2];
+      const approval = await prisma.approvalRequest.findFirst({
+        where: { status: 'pending', id: { endsWith: idSuffix } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!approval) {
+        await ctx.reply('Aucune demande d\'approbation en attente avec cet identifiant.');
+        return;
+      }
+      const handled = await this.decideApproval(approval.id, decision === 'approve');
+      await ctx.reply(
+        !handled
+          ? 'Demande déjà traitée ou expirée.'
+          : decision === 'approve'
+            ? '✅ Approuvé — l\'action s\'exécute automatiquement. Résultat dans quelques secondes.'
+            : '🚫 Refusé — l\'action ne sera pas exécutée.'
+      );
     });
 
     // ── Text messages ─────────────────────────────────────────────────────────
@@ -397,6 +440,48 @@ export class TelegramIntegration {
       const errMsg = error instanceof Error ? error.message : 'Erreur inconnue';
       await ctx.reply(`Erreur : ${errMsg}`);
     }
+  }
+
+  // ─── Approval handling ───────────────────────────────────────────────────────
+
+  /**
+   * Flip a pending ApprovalRequest to approved/rejected.
+   * The approval executor (approval-flow.ts) picks up approved rows within ~5s
+   * and runs the stored tool call automatically.
+   * Returns false if the request was already decided or expired.
+   */
+  private async decideApproval(approvalId: string, approve: boolean): Promise<boolean> {
+    const updated = await prisma.approvalRequest.updateMany({
+      where: { id: approvalId, status: 'pending' },
+      data: {
+        status: approve ? 'approved' : 'rejected',
+        decidedBy: 'telegram',
+        decidedAt: new Date(),
+      },
+    });
+    return updated.count === 1;
+  }
+
+  /**
+   * Send an approval request to the store's linked chat with
+   * Approuver / Refuser inline buttons.
+   */
+  async sendApprovalRequest(storeId: string, approvalId: string, text: string): Promise<void> {
+    const chatId = await getChatIdForStore(storeId);
+    if (!chatId) return;
+
+    const keyboard = new InlineKeyboard()
+      .text('✅ Approuver', `approval:approve:${approvalId}`)
+      .text('🚫 Refuser', `approval:reject:${approvalId}`);
+
+    await this.bot.api
+      .sendMessage(Number(chatId), text, { parse_mode: 'Markdown', reply_markup: keyboard })
+      .catch(async () => {
+        // Markdown parse can fail on special chars — retry as plain text
+        await this.bot.api.sendMessage(Number(chatId), text.replace(/[*_`\\]/g, ''), {
+          reply_markup: keyboard,
+        });
+      });
   }
 
   // ─── KAIROS alert sending ────────────────────────────────────────────────────

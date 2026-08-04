@@ -1,15 +1,11 @@
 /**
- * request_approval — Human-in-the-Loop Gate
+ * request_approval — Human-in-the-Loop Gate (informational)
  *
- * Agents use this tool before executing high-risk actions.
- * Creates an ApprovalRequest in the DB, optionally sends a Telegram notification,
- * then polls until approved/rejected (or times out after 24h).
- *
- * Risk levels:
- *   low      — informational, auto-approved after 1h if no response
- *   medium   — standard review, waits up to 24h
- *   high     — requires explicit approval, blocks indefinitely
- *   critical — urgent alert, uses Telegram with prominent formatting
+ * For high-impact actions NOT covered by gated tools (requiresApproval).
+ * Creates an ApprovalRequest in the DB and notifies Telegram, then returns
+ * immediately (non-blocking). Gated tools (article_create, product_create, …)
+ * do not need this: base-agent creates an executable approval automatically —
+ * see lib/approval-flow.ts.
  */
 
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
@@ -25,18 +21,18 @@ export function setApprovalTelegramNotifier(
   telegramNotifier = fn;
 }
 
-const POLL_INTERVAL_MS = 5_000;  // Poll DB every 5s
-const LOW_RISK_AUTO_APPROVE_MS = 60 * 60 * 1000; // 1h auto-approve for low risk
-const MAX_WAIT_MS = 24 * 60 * 60 * 1000; // 24h max wait
+const MAX_WAIT_MS = 24 * 60 * 60 * 1000; // 24h before the request expires
 
 export const requestApprovalTool: AgentTool = {
   name: 'request_approval',
   description:
-    'Request human approval before executing a sensitive or high-impact action. ' +
-    'Use this BEFORE performing: price changes, launching marketing campaigns, deleting content, ' +
-    'sending emails to customers, modifying store settings, or any action with significant business impact. ' +
-    'The human will be notified via Telegram and the Mission Control dashboard. ' +
-    'Provide a clear description of what you want to do and why.',
+    'Request human approval for a high-impact action that is NOT covered by a gated tool. ' +
+    'IMPORTANT: do NOT use this before tools that already require approval ' +
+    '(product_create, product_update, article_create, article_update, blog_create, inventory_update, etc.) — ' +
+    'those tools create their own approval request automatically when called; just call them directly. ' +
+    'Use request_approval only for other sensitive actions: launching marketing campaigns, ' +
+    'sending emails to customers, modifying store settings. ' +
+    'The human is notified via Telegram and Mission Control.',
   category: 'orchestration',
   inputSchema: {
     type: 'object',
@@ -114,70 +110,21 @@ export const requestApprovalTool: AgentTool = {
 
     console.log(`\n🔐 Approval requested: ${action} (${riskLevel}) — ID: ${approval.id}`);
 
-    // For low-risk: auto-approve after 1h if no decision
-    if (riskLevel === 'low') {
-      return {
-        success: true,
-        data: {
-          approvalId: approval.id,
-          status: 'pending',
-          message:
-            `Demande d'approbation créée (risque faible). ` +
-            `Si aucune décision dans 1h, l'action sera auto-approuvée. ` +
-            `Vous pouvez continuer avec d'autres tâches en attendant.`,
-        },
-      };
-    }
-
-    // For medium/high/critical: poll until decision or timeout
-    const maxWait = riskLevel === 'critical' ? 2 * 60 * 60 * 1000 : MAX_WAIT_MS; // 2h for critical
-    const deadline = Date.now() + maxWait;
-
-    while (Date.now() < deadline) {
-      await sleep(POLL_INTERVAL_MS);
-
-      const updated = await prisma.approvalRequest
-        .findUnique({ where: { id: approval.id } })
-        .catch(() => null);
-
-      if (!updated) break;
-
-      if (updated.status === 'approved') {
-        return {
-          success: true,
-          data: {
-            approvalId: approval.id,
-            status: 'approved',
-            message: `Action approuvée par l'humain. Vous pouvez procéder avec: ${action}`,
-          },
-        };
-      }
-
-      if (updated.status === 'rejected') {
-        return {
-          success: false,
-          error: `Action refusée par l'humain: ${action}. Ne pas exécuter cette action.`,
-          data: { approvalId: approval.id, status: 'rejected' },
-        };
-      }
-    }
-
-    // Timeout
-    await prisma.approvalRequest.update({
-      where: { id: approval.id },
-      data: { status: 'expired' },
-    }).catch(() => {});
-
+    // Non-blocking: return immediately. The human decides from Mission Control
+    // or Telegram; the agent must NOT execute the action in the meantime.
+    // For short waits (< 2 min), the agent may poll with check_approval-style
+    // reads, but the standard flow is: inform the user and end the turn.
     return {
-      success: false,
-      error:
-        `Délai d'approbation dépassé pour: ${action}. ` +
-        `Action annulée. Le propriétaire peut la revalider depuis Mission Control.`,
-      data: { approvalId: approval.id, status: 'expired' },
+      success: true,
+      data: {
+        approvalId: approval.id,
+        status: 'pending',
+        message:
+          `Demande d'approbation créée (ID: ${approval.id}, risque ${riskLevel}). ` +
+          `N'exécute PAS l'action tant qu'elle n'est pas approuvée. ` +
+          `Informe l'utilisateur qu'il peut approuver depuis Mission Control (onglet Approbations) ou Telegram, ` +
+          `puis termine ton tour. Il te redemandera l'exécution une fois approuvée si nécessaire.`,
+      },
     };
   },
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

@@ -17,6 +17,11 @@ import { createLLMProvider } from '../lib/llm/provider-factory.js';
 import { LLMProvider } from '../lib/llm/types.js';
 import { classifyComplexity } from '../core/complexity-router.js';
 import { MemoryEngine } from '../lib/memory-engine.js';
+import {
+  createExecutableApproval,
+  executeApproval,
+  findPendingApprovalForConversation,
+} from '../lib/approval-flow.js';
 
 // ── Context window compaction (4 levels) ─────────────────────────────────────
 //
@@ -148,22 +153,6 @@ export class BaseAgent {
   // Max messages to send to the LLM per call (sliding context window)
   private static readonly LLM_CONTEXT_WINDOW = 80;
 
-  // ── Pending approvals ────────────────────────────────────────────────────────
-  // Module-level map: conversationId → pending tool call awaiting user confirmation.
-  // TTL: 10 minutes. Only one pending action per conversation at a time.
-  private static readonly pendingApprovals = new Map<string, {
-    approvalKey: string;
-    toolName: string;
-    params: any;
-    expiresAt: number;
-  }>();
-
-  private static getApprovalKey(toolName: string, params: any): string {
-    // Stable key regardless of key ordering
-    const sorted = Object.fromEntries(Object.entries(params).sort());
-    return `${toolName}:${JSON.stringify(sorted)}`;
-  }
-
   private static isConfirmation(message: string): boolean {
     const lower = message.toLowerCase().trim();
     if (lower.length > 80) return false; // Long messages are probably new requests, not confirmations
@@ -188,25 +177,36 @@ export class BaseAgent {
     };
 
     // ── Approval gate ─────────────────────────────────────────────────────────
-    // If the user's message is a confirmation, mark the pending action as approved
-    // so the LLM can call it in this turn without being blocked again.
-    const approvedKeysThisTurn = new Set<string>();
+    // If the user's message is a confirmation, execute the pending approved
+    // action right now and hand the result to the LLM in this same turn.
+    let userTurnContent = message;
     if (BaseAgent.isConfirmation(message)) {
-      const pending = BaseAgent.pendingApprovals.get(conversationId);
-      if (pending && pending.expiresAt > Date.now()) {
-        approvedKeysThisTurn.add(pending.approvalKey);
-        BaseAgent.pendingApprovals.delete(conversationId);
-        console.log(`  ✅ Approval received for: ${pending.toolName}`);
+      const pending = await findPendingApprovalForConversation(context.storeId, conversationId)
+        .catch(() => null);
+      if (pending) {
+        console.log(`  ✅ Chat approval received for: ${pending.action}`);
+        const result = await executeApproval(
+          pending.id,
+          {
+            toolRegistry: this.toolRegistry,
+            router: context.router,
+            sessionManager: context.sessionManager,
+          },
+          { claimFrom: 'pending', postChatMessage: false, decidedBy: 'chat' }
+        );
+        if (result) {
+          const outcome = result.success
+            ? `Résultat : ${JSON.stringify(result.data ?? {}).slice(0, 1500)}`
+            : `Échec : ${result.error}`;
+          userTurnContent =
+            `${message}\n\n[Système — l'action en attente (${pending.action}) a été approuvée et exécutée automatiquement. ` +
+            `${outcome}\nFais un compte rendu à l'utilisateur. Ne rappelle PAS l'outil.]`;
+        }
       }
-    }
-    // Also purge expired entries on each chat() call (lightweight GC)
-    const now = Date.now();
-    for (const [key, val] of BaseAgent.pendingApprovals) {
-      if (val.expiresAt < now) BaseAgent.pendingApprovals.delete(key);
     }
 
     // First user message
-    addToHistory({ role: 'user', content: message });
+    addToHistory({ role: 'user', content: userTurnContent });
 
     // Level 5: LLM summarization — runs once before the agentic loop when history
     // exceeds the context window. The summary is cached in AgentMemory so future
@@ -266,27 +266,27 @@ export class BaseAgent {
           // Check if this tool requires approval
           const toolDef = this.toolRegistry.get(toolCall.name);
           if (toolDef?.requiresApproval) {
-            const approvalKey = BaseAgent.getApprovalKey(toolCall.name, toolCall.input as any);
-            if (!approvedKeysThisTurn.has(approvalKey)) {
-              // Block execution — store as pending, ask the user to confirm
-              BaseAgent.pendingApprovals.set(conversationId, {
-                approvalKey,
-                toolName: toolCall.name,
-                params: toolCall.input,
-                expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
-              });
-              console.log(`  🔐 Approval required for: ${toolCall.name}`);
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolCall.id,
-                content: `APPROVAL_REQUIRED\n\nTool: ${toolCall.name}\nDetails:\n${JSON.stringify(toolCall.input, null, 2)}\n\nDescribe exactly what you are about to do and ask the user for explicit confirmation before proceeding. Once they confirm, the action will execute automatically.`,
-                is_error: false,
-              });
-              continue;
-            }
-            // User already confirmed — remove from approved set and proceed
-            approvedKeysThisTurn.delete(approvalKey);
-            console.log(`  ✅ Executing approved action: ${toolCall.name}`);
+            const approval = await createExecutableApproval({
+              storeId: context.storeId,
+              agentId: this.config.id,
+              agentName: this.config.name,
+              toolName: toolCall.name,
+              params: toolCall.input as Record<string, any>,
+              conversationId,
+            });
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content:
+                `APPROVAL_PENDING (ID: ${approval.id})\n\nTool: ${toolCall.name}\n` +
+                `Une demande d'approbation a été créée avec EXACTEMENT ces paramètres. ` +
+                `Elle est visible dans Mission Control (onglet Approbations) et sur Telegram. ` +
+                `Dès que l'utilisateur approuve (bouton, /approve, ou "oui" dans ce chat), ` +
+                `l'action s'exécutera AUTOMATIQUEMENT — NE rappelle PAS cet outil. ` +
+                `Décris à l'utilisateur ce que tu t'apprêtes à faire et comment approuver.`,
+              is_error: false,
+            });
+            continue;
           }
 
           const toolStartTime = Date.now();
@@ -449,8 +449,8 @@ export class BaseAgent {
     inventory: ['inventory', 'products', 'store', 'memory'],
     support:   ['customers', 'orders', 'products', 'store', 'memory'],
     content:   ['content', 'products', 'collections', 'store', 'memory'],
-    seo:       ['seo', 'store', 'memory'],
-    major:     ['products', 'collections', 'inventory', 'orders', 'customers', 'store', 'memory'],
+    seo:       ['seo', 'content', 'store', 'memory'],
+    major:     ['products', 'collections', 'inventory', 'orders', 'customers', 'content', 'store', 'memory'],
   };
 
   /**
@@ -599,7 +599,7 @@ Available tools: ${toolNames}
 
 CRITICAL RULES:
 1. Use tools to get REAL data from the store. Never make up data.
-2. Tools marked as requiring approval (product_create, product_update, inventory_update, customer_update_tags) will NOT execute immediately. Instead, you must CLEARLY describe what you want to do and ask the user for confirmation before using those tools.
+2. Tools marked as requiring approval (product_create, product_update, article_create, article_update, blog_create, inventory_update, customer_update_tags, collection_delete) do NOT execute immediately: calling them automatically creates an approval request visible in Mission Control and Telegram. So call the tool DIRECTLY with the final, complete parameters — do NOT ask "should I proceed?" beforehand. After the call, tell the user an approval is pending and that the action will run automatically once approved. NEVER re-call the tool after approval — it executes on its own.
 3. For all other tools — including read-only Shopify operations (product_list, product_get, customer_list, etc.), ALL Google Search Console tools (seo_*), and ALL Klaviyo tools (call_klaviyo_api) — execute them DIRECTLY without asking for confirmation. Do not ask "should I proceed?" before using these tools.
 4. When listing items, use reasonable limits (10-20) unless the user asks for more.
 10. MÉMOIRE — Tu disposes des outils memory_read et memory_write:
