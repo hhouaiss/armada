@@ -15,7 +15,8 @@ import { Router } from '../core/router.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { SessionManager } from '../core/session-manager.js';
 import { getStoreCredentials, saveChatMessage, prisma } from '../lib/database.js';
-import { decryptToken } from '../lib/shopify-client.js';
+import { decryptToken, ShopifyClient } from '../lib/shopify-client.js';
+import { readObjectivesTool } from '../tools/read-objectives.js';
 import { nanoid } from 'nanoid';
 import { runAutoDream, setDreamEnabled, isDreamEnabled } from '../workers/auto-dream.js';
 import { setKairosEnabled } from '../workers/kairos-worker.js';
@@ -552,14 +553,48 @@ export class TelegramIntegration {
         }
       } catch { /* non-blocking */ }
 
+      // Inject active objectives directly so the briefing doesn't depend on
+      // the agent choosing to call read_objectives
+      let objectivesContext = '';
+      try {
+        const res = await readObjectivesTool.execute({ status: 'active' }, context as any);
+        const summary = (res.data as any)?.summary;
+        if (res.success && summary) {
+          objectivesContext = `\n\nOBJECTIFS ACTIFS:\n${summary}`;
+        }
+      } catch { /* non-blocking */ }
+
+      // Inject yesterday's concrete numbers from Shopify
+      let salesContext = '';
+      try {
+        const client = new ShopifyClient(store.shopifyDomain, accessToken);
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { orders } = await client.getOrders({ limit: 50 });
+        const recent = orders.filter(
+          (o: any) => o.created_at && new Date(o.created_at) >= since
+        );
+        const revenue = recent.reduce(
+          (sum: number, o: any) => sum + parseFloat(o.total_price ?? '0'),
+          0
+        );
+        const currency = recent[0]?.currency ?? '';
+        salesContext =
+          `\n\nCHIFFRES DES DERNIÈRES 24H (source Shopify):\n` +
+          `- Commandes: ${recent.length}\n` +
+          `- Chiffre d'affaires: ${revenue.toFixed(2)} ${currency}`.trim();
+      } catch { /* non-blocking */ }
+
       const briefingPrompt =
         'C\'est le matin. Génère un briefing de démarrage de journée. ' +
-        'Commence par lire les objectifs actifs (read_objectives), puis synthétise : ' +
-        '1) Bilan de la nuit et mémoire consolidée, ' +
+        'Les objectifs actifs, les chiffres de vente et le plan du jour sont fournis ci-dessous — ' +
+        'ne les recharge pas via des outils, utilise-les directement. Synthétise : ' +
+        '1) Bilan de la nuit et chiffres des dernières 24h, ' +
         '2) Plan stratégique du jour (tâches prioritaires par département), ' +
         '3) Points d\'attention et alertes, ' +
         '4) Une recommandation proactive. ' +
         'Sois concis, structuré, et orienté action.' +
+        objectivesContext +
+        salesContext +
         planContext;
 
       const response = await agent.chat(briefingPrompt, context, `user-${storeId}`);
@@ -572,6 +607,12 @@ export class TelegramIntegration {
       }
     } catch (err) {
       console.error('Morning briefing error:', err);
+      await this.bot.api
+        .sendMessage(
+          Number(chatId),
+          '☀️ Briefing du matin indisponible ce matin — utilisez /briefing pour réessayer.'
+        )
+        .catch(() => {});
     }
   }
 

@@ -12,6 +12,7 @@ import { prisma, cleanupOldSessions, testConnection } from './lib/database.js';
 import {
   getProductTool,
   listProductsTool,
+  searchProductsTool,
   createProductTool,
   updateProductTool,
 } from './tools/shopify/products.js';
@@ -91,6 +92,7 @@ async function bootstrap() {
   console.log('📦 Registering Shopify tools...');
   toolRegistry.register(getProductTool);
   toolRegistry.register(listProductsTool);
+  toolRegistry.register(searchProductsTool);
   toolRegistry.register(createProductTool);
   toolRegistry.register(updateProductTool);
 
@@ -275,24 +277,49 @@ async function bootstrap() {
     await checkKairosSchedule(stores.map((s) => ({ id: s.id, userId: s.userId })));
   }, 15 * 60 * 1000); // Every 15 minutes
 
-  // Morning briefing: send at ~09:00 local time (check every 30 minutes)
+  // Morning briefing: send at BRIEFING_HOUR in BRIEFING_TIMEZONE (check every 5 minutes).
+  // Last-sent date is persisted per store in AgentMemory so restarts never
+  // duplicate or skip a briefing.
   if (telegram) {
-    let lastBriefingDate = '';
+    const briefingTz = process.env.BRIEFING_TIMEZONE || 'Europe/Paris';
+    const briefingHour = parseInt(process.env.BRIEFING_HOUR || '9', 10);
     setInterval(async () => {
-      const now = new Date();
-      const hour = now.getHours();
-      const dateKey = now.toISOString().slice(0, 10);
-      // Fire between 09:00 and 09:30, once per day
-      if (hour === 9 && dateKey !== lastBriefingDate) {
-        lastBriefingDate = dateKey;
-        console.log(`☀️  Morning briefing time — sending to ${stores.length} store(s)`);
-        for (const store of stores) {
-          await telegram!.sendMorningBriefing(store.id).catch((err: any) =>
-            console.error(`Morning briefing error for store ${store.id}:`, err)
-          );
-        }
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: briefingTz,
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+      }).formatToParts(new Date());
+      const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+      const hour = parseInt(get('hour'), 10) % 24;
+      const dateKey = `${get('year')}-${get('month')}-${get('day')}`;
+      if (hour !== briefingHour) return;
+
+      const activeStores = await prisma.store.findMany({
+        where: { isActive: true },
+        select: { id: true },
+      });
+      for (const store of activeStores) {
+        const where = {
+          storeId_type_key: { storeId: store.id, type: 'meta', key: 'briefing_last_sent' },
+        };
+        const last = await prisma.agentMemory.findUnique({ where }).catch(() => null);
+        if (last?.content === dateKey) continue;
+
+        // Mark as sent before sending so a mid-send crash can't cause a duplicate
+        await prisma.agentMemory.upsert({
+          where,
+          create: { storeId: store.id, type: 'meta', key: 'briefing_last_sent', content: dateKey },
+          update: { content: dateKey },
+        });
+        console.log(`☀️  Morning briefing time (${briefingTz}) — sending to store ${store.id}`);
+        await telegram!.sendMorningBriefing(store.id).catch((err: any) =>
+          console.error(`Morning briefing error for store ${store.id}:`, err)
+        );
       }
-    }, 30 * 60 * 1000); // Every 30 minutes
+    }, 5 * 60 * 1000); // Every 5 minutes
   }
 
   // Graceful shutdown

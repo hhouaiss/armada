@@ -40,6 +40,7 @@ function flattenProduct(p: any) {
   return {
     id: fromGid(p.id),
     title: p.title,
+    handle: p.handle,
     body_html: p.bodyHtml,
     vendor: p.vendor,
     status: p.status?.toLowerCase(),
@@ -190,6 +191,23 @@ export class ShopifyClient {
         }
       }`,
       { first: params?.limit ?? 20 }
+    );
+    return { products: edges(data.products).map(flattenProduct) };
+  }
+
+  async searchProducts(query: string, limit = 10) {
+    const data = await this.query(
+      `query SearchProducts($first: Int!, $query: String!) {
+        products(first: $first, query: $query) {
+          edges { node {
+            id title handle bodyHtml vendor status
+            variants(first: 10) {
+              edges { node { id title price inventoryQuantity inventoryItem { id } } }
+            }
+          }}
+        }
+      }`,
+      { first: limit, query }
     );
     return { products: edges(data.products).map(flattenProduct) };
   }

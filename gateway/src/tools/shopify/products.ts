@@ -3,7 +3,8 @@ import { ShopifyClient } from '../../lib/shopify-client.js';
 
 export const getProductTool: ShopifyTool = {
   name: 'product_get',
-  description: 'Get a product by ID from Shopify',
+  description:
+    'Get a product by ID from Shopify. If you only have the product name, use product_search first to find its ID.',
   category: 'products',
   inputSchema: {
     type: 'object',
@@ -42,6 +43,86 @@ export const listProductsTool: ShopifyTool = {
       return { success: true, data: { products: response.products, total: response.products.length } };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to list products' };
+    }
+  },
+};
+
+// Accent-insensitive, case-insensitive normalization for fuzzy matching
+function normalize(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export const searchProductsTool: ShopifyTool = {
+  name: 'product_search',
+  description:
+    'Find products by name (full or partial, typos and accents tolerated). ' +
+    'ALWAYS use this first when the user mentions a product by its name — ' +
+    'never ask the user for a product ID or handle. Returns matching products ' +
+    'with their IDs so you can then call product_get / product_update.',
+  category: 'products',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'The product name or part of it, as the user said it' },
+      limit: { type: 'number', description: 'Max results (default 10)' },
+    },
+    required: ['name'],
+  },
+
+  async execute(params: { name: string; limit?: number }, context: ToolContext): Promise<ToolResult> {
+    try {
+      const client = new ShopifyClient(context.shopifyDomain, context.shopifyAccessToken);
+      const limit = params.limit ?? 10;
+      const term = params.name.trim();
+
+      // 1. Shopify server-side search: wildcard on title, then full-text
+      const escaped = term.replace(/["\\]/g, '\\$&');
+      for (const q of [`title:*${escaped}*`, escaped]) {
+        const { products } = await client.searchProducts(q, limit);
+        if (products.length > 0) {
+          return { success: true, data: { products, total: products.length, matchType: 'shopify' } };
+        }
+      }
+
+      // 2. Fuzzy fallback: fetch the catalog and score client-side
+      // (handles accents, word order, and partial words that Shopify misses)
+      const { products: all } = await client.getProducts({ limit: 100 });
+      const queryTokens = normalize(term).split(' ').filter(Boolean);
+      const scored = all
+        .map((p: any) => {
+          const title = normalize(p.title ?? '');
+          const matched = queryTokens.filter(
+            (t) => title.includes(t) || title.split(' ').some((w: string) => w.startsWith(t.slice(0, 4)))
+          );
+          return { product: p, score: queryTokens.length ? matched.length / queryTokens.length : 0 };
+        })
+        .filter((s) => s.score >= 0.5)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      if (scored.length > 0) {
+        return {
+          success: true,
+          data: { products: scored.map((s) => s.product), total: scored.length, matchType: 'fuzzy' },
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          products: [],
+          total: 0,
+          hint: `Aucun produit trouvé pour "${term}". Suggestions proches indisponibles — utilise product_list pour voir le catalogue.`,
+        },
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to search products' };
     }
   },
 };
@@ -87,7 +168,9 @@ export const createProductTool: ShopifyTool = {
 
 export const updateProductTool: ShopifyTool = {
   name: 'product_update',
-  description: 'Update an existing product in Shopify. Use this to modify product details, pricing, descriptions, etc.',
+  description:
+    'Update an existing product in Shopify. Use this to modify product details, pricing, descriptions, etc. ' +
+    'If you only have the product name, use product_search first to find its ID.',
   category: 'products',
   requiresApproval: true,
   inputSchema: {
