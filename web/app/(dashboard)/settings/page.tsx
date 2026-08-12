@@ -518,6 +518,137 @@ function GoogleSearchConsoleCard({ isConnected, onDisconnect }: { isConnected: b
   );
 }
 
+// ─── MCP Servers Card ──────────────────────────────────────────────────────────
+// Serveurs MCP externes — le gateway les connecte au démarrage et expose leurs
+// outils aux agents (platform "mcp:<slug>" dans la table Integration).
+
+function McpServersCard({ integrations, onMutate }: { integrations: any[]; onMutate: () => Promise<any> }) {
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
+
+  const mcpServers = integrations.filter((i: any) => i.platform?.startsWith('mcp:'));
+
+  const handleAdd = async () => {
+    const slug = form.slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    if (!slug || !form.url.trim()) {
+      setError('Nom et URL sont requis.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const credentials: Record<string, any> = { url: form.url.trim() };
+      if (form.authHeader.trim()) credentials.headers = { Authorization: form.authHeader.trim() };
+      if (form.category.trim()) credentials.category = form.category.trim();
+      if (form.allowedTools.trim()) {
+        credentials.allowedTools = form.allowedTools.split(',').map(t => t.trim()).filter(Boolean);
+      }
+      const res = await fetch('/api/integrations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform: `mcp:${slug}`, credentials }),
+      });
+      if (!res.ok) throw new Error('Échec de l\'enregistrement');
+      await onMutate();
+      setForm({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
+      setShowForm(false);
+    } catch (e: any) {
+      setError(e?.message || 'Échec de l\'enregistrement');
+    } finally { setSaving(false); }
+  };
+
+  const handleRemove = async (platform: string) => {
+    try { await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' }); await onMutate(); }
+    catch { /* noop */ }
+  };
+
+  const mcpFields = [
+    { key: 'slug', label: 'Nom (slug)', placeholder: 'klaviyo', type: 'text' },
+    { key: 'url', label: 'URL du serveur MCP', placeholder: 'https://mcp.exemple.com/mcp', type: 'text' },
+    { key: 'authHeader', label: 'En-tête Authorization (optionnel)', placeholder: 'Bearer sk_...', type: 'password' },
+    { key: 'category', label: 'Catégorie d\'outils (optionnel)', placeholder: 'marketing — défaut : mcp', type: 'text' },
+    { key: 'allowedTools', label: 'Outils autorisés (optionnel, séparés par des virgules, * accepté)', placeholder: 'get_*, send_campaign', type: 'text' },
+  ] as const;
+
+  return (
+    <div className="rounded-2xl border border-[var(--armada-accent)]/50 armada-card overflow-hidden"
+      style={{ backgroundColor: 'var(--armada-surface)' }}>
+      <div className="px-5 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Server className="h-4 w-4 text-[var(--armada-text)]/40" />
+          <div>
+            <h3 className="text-sm font-medium font-mono text-[var(--armada-text)]">Serveurs MCP</h3>
+            <p className="text-[10px] font-mono text-[var(--armada-text)]/40">
+              Connectez des apps externes via leurs serveurs MCP — les outils sont exposés aux agents sans code
+            </p>
+          </div>
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          className="px-3 py-1.5 rounded-full border border-[var(--armada-accent)] text-[10px] font-mono text-[var(--armada-text)]/60 hover:bg-[var(--armada-surface-hover)] transition-colors uppercase tracking-widest">
+          {showForm ? 'Annuler' : '+ Ajouter'}
+        </button>
+      </div>
+
+      {mcpServers.length > 0 && (
+        <div className="border-t border-[var(--armada-accent)]/50">
+          {mcpServers.map((server: any) => (
+            <div key={server.platform}
+              className="px-5 py-3 flex items-center justify-between border-b border-[var(--armada-accent)]/30 last:border-b-0">
+              <div className="flex items-center gap-3">
+                {server.isActive
+                  ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                  : <Circle className="h-3.5 w-3.5 text-[var(--armada-text)]/20" />}
+                <span className="text-xs font-mono text-[var(--armada-text)]/80">
+                  {server.platform.slice(4)}
+                </span>
+              </div>
+              <button onClick={() => handleRemove(server.platform)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-500/20 text-red-500 text-[10px] font-mono hover:bg-red-500/10 transition-colors">
+                <Unplug className="h-3 w-3" />Retirer
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showForm && (
+        <div className="border-t border-[var(--armada-accent)]/50 p-5 space-y-3">
+          {mcpFields.map(field => (
+            <div key={field.key}>
+              <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-1.5 block">
+                {field.label}
+              </label>
+              <input type={field.type} placeholder={field.placeholder}
+                value={form[field.key]}
+                onChange={(e) => setForm(prev => ({ ...prev, [field.key]: e.target.value }))}
+                className={inputClass}
+                style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
+                autoComplete="off" data-lpignore="true" data-1p-ignore
+              />
+            </div>
+          ))}
+          <p className="text-[10px] font-mono text-[var(--armada-text)]/40 leading-relaxed">
+            Par défaut, seuls les outils annotés lecture seule s&apos;exécutent sans approbation — le reste passe par le flux d&apos;approbation (Mission Control / Telegram). Redémarrez le gateway après l&apos;ajout.
+          </p>
+          <div className="flex items-center gap-2 pt-1">
+            <button onClick={handleAdd} disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40 armada-btn-primary"
+              style={{ backgroundColor: 'var(--armada-primary)' }}>
+              {saving ? 'Enregistrement…' : 'Connecter le serveur'}
+            </button>
+            {error && (
+              <span className="text-xs text-red-500 font-mono flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />{error}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IntegrationsTab() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, Record<string, string>>>({});
@@ -690,6 +821,9 @@ function IntegrationsTab() {
           </div>
         );
       })}
+
+      {/* MCP servers */}
+      <McpServersCard integrations={integrations} onMutate={mutate} />
 
       {/* Security notice */}
       <div className="rounded-2xl border border-[var(--armada-primary)]/20 px-5 py-4 flex items-start gap-3"

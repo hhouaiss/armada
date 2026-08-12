@@ -68,6 +68,7 @@ import {
   setApprovalActionNotifier,
   setApprovalResultNotifier,
 } from './lib/approval-flow.js';
+import { connectMcpServers } from './lib/mcp-bridge.js';
 
 // Load environment variables
 config();
@@ -162,6 +163,9 @@ async function bootstrap() {
 
   // Human-in-the-loop approval gate
   toolRegistry.register(requestApprovalTool);
+
+  // External MCP servers (Integration rows with platform "mcp:<slug>")
+  await connectMcpServers(toolRegistry);
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 
