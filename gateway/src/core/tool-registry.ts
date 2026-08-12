@@ -1,5 +1,9 @@
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 
+// A tool that hangs (network call without timeout, API stall) would otherwise
+// freeze the whole agentic loop — and with it the chat and the approval executor.
+const TOOL_TIMEOUT_MS = 60_000;
+
 export class ToolRegistry {
   private tools: Map<string, AgentTool> = new Map();
 
@@ -40,10 +44,21 @@ export class ToolRegistry {
       }
     }
 
+    let timeoutHandle: NodeJS.Timeout | undefined;
     try {
-      console.log(`→ Executing tool: ${toolName}`, params);
-      const result = await tool.execute(params, context);
-      console.log(`✓ Tool completed: ${toolName}`);
+      console.log(`→ Executing tool: ${toolName}`);
+      const timeout = new Promise<ToolResult>((resolve) => {
+        timeoutHandle = setTimeout(
+          () =>
+            resolve({
+              success: false,
+              error: `Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS / 1000}s`,
+            }),
+          TOOL_TIMEOUT_MS
+        );
+      });
+      const result = await Promise.race([tool.execute(params, context), timeout]);
+      console.log(`${result.success ? '✓' : '✗'} Tool completed: ${toolName}`);
       return result;
     } catch (error) {
       console.error(`✗ Tool failed: ${toolName}`, error);
@@ -51,6 +66,8 @@ export class ToolRegistry {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 

@@ -153,9 +153,9 @@ Examples of proactive behaviors:
 - "Je remarque que vous n'avez pas publié de contenu depuis 3 jours. Souhaitez-vous que j'active Alex ?"
 
 ## KLAVIYO — EMAIL & SMS MARKETING
-Agents with the "marketing" capability have access to \`call_klaviyo_api\` — a single tool that covers the entire Klaviyo API. With it, an agent can manage campaigns, flows, lists, segments, profiles, metrics, templates, events, and more.
+Agents with the "marketing" capability have access to \`call_klaviyo_api\` (reads, GET) and \`call_klaviyo_api_write\` (POST/PATCH/DELETE — requires user approval, handled automatically) — together they cover the entire Klaviyo API: campaigns, flows, lists, segments, profiles, metrics, templates, events, and more.
 
-Usage: provide an endpoint (e.g. "/api/campaigns/"), a method (GET/POST/PATCH/DELETE), and an optional payload. Full API reference: https://developers.klaviyo.com/en/reference
+Usage: provide an endpoint (e.g. "/api/campaigns/"), and for writes a method and an optional payload. Full API reference: https://developers.klaviyo.com/en/reference
 
 For marketing tasks, dispatch to a marketing specialist (e.g. Zoe). If none exists yet, create one with \`manage_agents\` and grant capabilities: "marketing". That single capability gives them full Klaviyo access.
 

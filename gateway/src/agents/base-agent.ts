@@ -242,7 +242,25 @@ export class BaseAgent {
       });
 
       // Agentic tool-use loop (OpenClaw pattern)
+      // Bounded: past MAX_TOOL_ITERATIONS tool calls are refused (error
+      // tool_results) so the model is forced to wrap up; past the hard
+      // limit we abort to guarantee termination.
+      const MAX_TOOL_ITERATIONS = 15;
+      const HARD_TOOL_ITERATIONS = MAX_TOOL_ITERATIONS + 3;
+      let toolIteration = 0;
       while (response.toolCalls && response.toolCalls.length > 0) {
+        toolIteration++;
+        if (toolIteration > HARD_TOOL_ITERATIONS) {
+          throw new Error(
+            `L'agent a dépassé la limite de ${HARD_TOOL_ITERATIONS} itérations d'outils — exécution interrompue.`
+          );
+        }
+        const overCap = toolIteration > MAX_TOOL_ITERATIONS;
+        if (overCap) {
+          console.warn(
+            `  ⚠️ Tool iteration cap (${MAX_TOOL_ITERATIONS}) reached for ${this.config.name} — refusing further tool calls`
+          );
+        }
         // Add assistant message with tool calls to new messages
         const assistantContent: any[] = [];
         if (response.content) {
@@ -262,6 +280,19 @@ export class BaseAgent {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const toolCall of response.toolCalls) {
           console.log(`  → Tool call: ${toolCall.name}`, toolCall.input);
+
+          if (overCap) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content:
+                `Error: limite d'itérations d'outils atteinte (${MAX_TOOL_ITERATIONS}). ` +
+                `N'appelle plus AUCUN outil. Fais immédiatement un compte rendu à l'utilisateur ` +
+                `de ce qui a été fait et de ce qui reste à faire.`,
+              is_error: true,
+            });
+            continue;
+          }
 
           // Check if this tool requires approval
           const toolDef = this.toolRegistry.get(toolCall.name);
@@ -600,7 +631,7 @@ Available tools: ${toolNames}
 CRITICAL RULES:
 1. Use tools to get REAL data from the store. Never make up data.
 2. Tools marked as requiring approval (product_create, product_update, article_create, article_update, blog_create, inventory_update, customer_update_tags, collection_delete) do NOT execute immediately: calling them automatically creates an approval request visible in Mission Control and Telegram. So call the tool DIRECTLY with the final, complete parameters — do NOT ask "should I proceed?" beforehand. After the call, tell the user an approval is pending and that the action will run automatically once approved. NEVER re-call the tool after approval — it executes on its own.
-3. For all other tools — including read-only Shopify operations (product_list, product_get, customer_list, etc.), ALL Google Search Console tools (seo_*), and ALL Klaviyo tools (call_klaviyo_api) — execute them DIRECTLY without asking for confirmation. Do not ask "should I proceed?" before using these tools.
+3. For all other tools — including read-only Shopify operations (product_list, product_get, customer_list, etc.), ALL Google Search Console tools (seo_*), and Klaviyo reads (call_klaviyo_api) — execute them DIRECTLY without asking for confirmation. Klaviyo writes (call_klaviyo_api_write) follow rule 2: call directly, approval is handled automatically. Do not ask "should I proceed?" before using these tools.
 4. When listing items, use reasonable limits (10-20) unless the user asks for more.
 10. MÉMOIRE — Tu disposes des outils memory_read et memory_write:
     - Utilise memory_write("decision", ...) quand le boss prend une décision stratégique.

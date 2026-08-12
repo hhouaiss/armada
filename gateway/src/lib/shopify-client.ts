@@ -148,13 +148,31 @@ export class ShopifyClient {
     document: string,
     variables?: Record<string, any>
   ): Promise<T> {
-    const response = await this.gql.request(document, { variables });
-    if (response.errors) {
-      const msg =
-        response.errors.message ?? JSON.stringify(response.errors.graphQLErrors ?? response.errors);
-      throw new Error(`Shopify GraphQL error: ${msg}`);
+    // Shopify throttles GraphQL by query cost — retry throttled/429 responses
+    // with exponential backoff (agents running in parallel on the same store
+    // hit this quickly).
+    const MAX_ATTEMPTS = 4;
+    for (let attempt = 1; ; attempt++) {
+      let errorMsg: string;
+      try {
+        const response = await this.gql.request(document, { variables });
+        if (!response.errors) return response.data as T;
+        errorMsg =
+          response.errors.message ??
+          JSON.stringify(response.errors.graphQLErrors ?? response.errors);
+      } catch (err: any) {
+        errorMsg = err?.message ?? String(err);
+        if (!/throttl|429|too many requests/i.test(errorMsg)) throw err;
+      }
+
+      const throttled = /throttl|429|too many requests/i.test(errorMsg);
+      if (!throttled || attempt >= MAX_ATTEMPTS) {
+        throw new Error(`Shopify GraphQL error: ${errorMsg}`);
+      }
+      const delay = 1000 * 2 ** (attempt - 1); // 1s, 2s, 4s
+      console.warn(`  ⚠️ Shopify throttled — retry ${attempt}/${MAX_ATTEMPTS - 1} in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
     }
-    return response.data as T;
   }
 
   // ── Products ───────────────────────────────────────────────────────────────

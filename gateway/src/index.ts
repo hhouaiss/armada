@@ -51,7 +51,7 @@ import {
 } from './tools/shopify/content.js';
 import { getStoreInfoTool } from './tools/shopify/store.js';
 import { googleSearchConsoleTools } from './tools/google-search-console.js';
-import { callKlaviyoApiTool } from './tools/klaviyo.js';
+import { callKlaviyoApiTool, callKlaviyoApiWriteTool } from './tools/klaviyo.js';
 import { dispatchToSpecialistTool } from './tools/dispatch-agent.js';
 import { parallelDispatchTool } from './tools/parallel-dispatch.js';
 import { manageAgentsTool } from './tools/manage-agents.js';
@@ -137,6 +137,7 @@ async function bootstrap() {
 
   // Register Klaviyo (marketing) tool
   toolRegistry.register(callKlaviyoApiTool);
+  toolRegistry.register(callKlaviyoApiWriteTool);
 
   // Register orchestration tools (used by The Major)
   toolRegistry.register(dispatchToSpecialistTool);
