@@ -40,6 +40,7 @@ import {
 } from './tools/shopify/orders.js';
 import {
   getCollectionTool,
+  searchCollectionsTool,
   listCollectionsTool,
   updateCollectionSEOTool,
 } from './tools/shopify/collections.js';
@@ -120,6 +121,7 @@ async function bootstrap() {
 
   // Register collection SEO tools
   toolRegistry.register(getCollectionTool);
+  toolRegistry.register(searchCollectionsTool);
   toolRegistry.register(listCollectionsTool);
   toolRegistry.register(updateCollectionSEOTool);
 

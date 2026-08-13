@@ -99,6 +99,7 @@ function flattenCollection(c: any) {
     title: c.title,
     handle: c.handle,
     body_html: c.descriptionHtml,
+    products_count: c.productsCount?.count,
     metafields_global_title_tag: c.seo?.title,
     metafields_global_description_tag: c.seo?.description,
   };
@@ -529,17 +530,44 @@ export class ShopifyClient {
 
   // ── Collections ────────────────────────────────────────────────────────────
 
-  async getCollections() {
+  async getCollections(limit = 250) {
+    const all: any[] = [];
+    let cursor: string | null = null;
+
+    while (all.length < limit) {
+      const data: any = await this.query(
+        `query GetCollections($first: Int!, $after: String) {
+          collections(first: $first, after: $after) {
+            edges { cursor node {
+              id title handle descriptionHtml
+              productsCount { count }
+              seo { title description }
+            }}
+            pageInfo { hasNextPage }
+          }
+        }`,
+        { first: Math.min(250, limit - all.length), after: cursor }
+      );
+      all.push(...edges(data.collections).map(flattenCollection));
+      if (!data.collections.pageInfo?.hasNextPage) break;
+      cursor = data.collections.edges[data.collections.edges.length - 1].cursor;
+    }
+
+    return { custom_collections: all };
+  }
+
+  async searchCollections(searchQuery: string, limit = 10) {
     const data = await this.query(
-      `query GetCollections($first: Int!) {
-        collections(first: $first) {
+      `query SearchCollections($first: Int!, $query: String!) {
+        collections(first: $first, query: $query) {
           edges { node {
             id title handle descriptionHtml
+            productsCount { count }
             seo { title description }
           }}
         }
       }`,
-      { first: 50 }
+      { first: limit, query: searchQuery }
     );
     return { custom_collections: edges(data.collections).map(flattenCollection) };
   }
@@ -549,6 +577,7 @@ export class ShopifyClient {
       `query GetCollection($id: ID!) {
         collection(id: $id) {
           id title handle descriptionHtml
+          productsCount { count }
           seo { title description }
         }
       }`,

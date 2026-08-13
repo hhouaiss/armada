@@ -1,5 +1,6 @@
 import { ShopifyTool, ToolContext, ToolResult } from '../../types/operations.js';
 import { ShopifyClient } from '../../lib/shopify-client.js';
+import { fuzzyRank } from '../../lib/fuzzy.js';
 
 export const getProductTool: ShopifyTool = {
   name: 'product_get',
@@ -47,17 +48,6 @@ export const listProductsTool: ShopifyTool = {
   },
 };
 
-// Accent-insensitive, case-insensitive normalization for fuzzy matching
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 export const searchProductsTool: ShopifyTool = {
   name: 'product_search',
   description:
@@ -93,24 +83,10 @@ export const searchProductsTool: ShopifyTool = {
       // 2. Fuzzy fallback: fetch the catalog and score client-side
       // (handles accents, word order, and partial words that Shopify misses)
       const { products: all } = await client.getProducts({ limit: 100 });
-      const queryTokens = normalize(term).split(' ').filter(Boolean);
-      const scored = all
-        .map((p: any) => {
-          const title = normalize(p.title ?? '');
-          const matched = queryTokens.filter(
-            (t) => title.includes(t) || title.split(' ').some((w: string) => w.startsWith(t.slice(0, 4)))
-          );
-          return { product: p, score: queryTokens.length ? matched.length / queryTokens.length : 0 };
-        })
-        .filter((s) => s.score >= 0.5)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
+      const matches = fuzzyRank(term, all, (p: any) => [p.title, p.handle], { limit });
 
-      if (scored.length > 0) {
-        return {
-          success: true,
-          data: { products: scored.map((s) => s.product), total: scored.length, matchType: 'fuzzy' },
-        };
+      if (matches.length > 0) {
+        return { success: true, data: { products: matches, total: matches.length, matchType: 'fuzzy' } };
       }
 
       return {
