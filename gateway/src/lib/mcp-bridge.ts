@@ -181,7 +181,19 @@ async function connectServer(slug: string, config: McpServerConfig): Promise<Cli
       args: config.args ?? [],
       env: config.env ? { ...process.env as Record<string, string>, ...config.env } : undefined,
     });
-    await client.connect(transport);
+    try {
+      await client.connect(transport);
+    } catch (err: any) {
+      if (/ENOENT/.test(err?.message ?? '')) {
+        throw new Error(
+          `commande "${config.command}" introuvable sur le serveur du gateway — ` +
+          (config.command === 'uvx'
+            ? 'installez uv (https://docs.astral.sh/uv) sur la machine/image qui héberge le gateway, ou utilisez un serveur MCP distant (URL).'
+            : 'installez-la sur la machine/image qui héberge le gateway, ou utilisez un serveur MCP distant (URL).')
+        );
+      }
+      throw err;
+    }
   } else {
     throw new Error(`MCP server "${slug}" has neither "url" nor "command" in its config`);
   }

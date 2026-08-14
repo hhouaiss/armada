@@ -332,6 +332,11 @@ export default function IntegrationsPage() {
     if (!res.ok) throw new Error('Échec de la connexion');
     await mutate();
 
+    if (app.kind === 'native') {
+      // Enable the gateway's gated native tools right away (Klaviyo, Telegram…)
+      try { await syncGateway(); } catch { /* gateway offline: tools enable at next boot */ }
+    }
+
     if (app.kind === 'mcp') {
       // Real check: the gateway must actually connect the server. If it can't,
       // roll back the row and surface the real error instead of a fake "Connecté".

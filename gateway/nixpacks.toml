@@ -1,0 +1,5 @@
+# "..." keeps the default Node.js packages; uv provides `uvx`, needed to run
+# Python-based MCP servers (Google Analytics, Google Workspace…) as stdio
+# subprocesses of the gateway.
+[phases.setup]
+nixPkgs = ["...", "uv", "python311"]

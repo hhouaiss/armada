@@ -80,20 +80,19 @@ export const CATALOG: CatalogApp[] = [
 
   // ── Apps via MCP ──
   {
+    // Connexion native : le gateway embarque un passthrough complet de l'API
+    // Klaviyo (callKlaviyoApi / write), activé dès que l'intégration existe.
+    // Pas de dépendance uvx/npx sur la machine du gateway.
     slug: 'klaviyo',
     name: 'Klaviyo',
     description: 'Campagnes et flows email/SMS : panier abandonné, winback, fidélité.',
     logo: 'K',
     category: 'marketing',
-    kind: 'mcp',
+    kind: 'native',
     tier: 'core',
-    mcp: {
-      command: 'uvx',
-      args: ['klaviyo-mcp-server@latest'],
-      category: 'marketing',
-      secrets: [{ key: 'apiKey', label: 'Clé API privée Klaviyo', placeholder: 'pk_…', inject: 'env', name: 'PRIVATE_API_KEY' }],
-    },
-    docsUrl: 'https://developers.klaviyo.com/en/docs/klaviyo_mcp_server',
+    nativePlatform: 'klaviyo',
+    nativeFields: [{ key: 'apiKey', label: 'Clé API privée Klaviyo', placeholder: 'pk_…' }],
+    docsUrl: 'https://developers.klaviyo.com/en/reference/api_overview',
   },
   {
     slug: 'stripe',

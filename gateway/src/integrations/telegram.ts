@@ -646,7 +646,21 @@ export class TelegramIntegration {
       { command: 'help',     description: 'Afficher l\'aide' },
     ]);
 
-    this.bot.start();
+    // bot.start() long-polls forever; its promise rejects on polling failures.
+    // Never let that take down the gateway — notably the 409 Conflict thrown
+    // when two gateway instances (e.g. local dev + deployed) poll with the
+    // same bot token: Telegram alerts stop, everything else keeps running.
+    this.bot.start().catch((err: any) => {
+      const desc = err?.description || err?.message || String(err);
+      if (err?.error_code === 409) {
+        console.error(
+          '⚠️ Telegram désactivé : une autre instance du gateway utilise déjà ce bot token (409 Conflict). ' +
+          'Arrêtez l\'autre instance (local vs déployé) ou utilisez des tokens différents.'
+        );
+      } else {
+        console.error(`⚠️ Telegram polling arrêté (le gateway continue) : ${desc}`);
+      }
+    });
   }
 
   async stop() {
