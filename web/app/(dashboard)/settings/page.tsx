@@ -1,15 +1,11 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
-import useSWR from 'swr';
-import { Badge } from '@/components/ui/badge';
 import {
-  Key, Trash2, TestTube, Check, X, Loader2, Eye, EyeOff, AlertCircle,
-  CheckCircle2, Circle, ExternalLink, ChevronDown, Globe, Search, Unplug, Server,
+  Key, Trash2, TestTube, Check, X, Loader2, Eye, EyeOff, AlertCircle, Server, Plug,
 } from 'lucide-react';
-import { useActiveStore } from '@/lib/hooks/useActiveStore';
 
 // ─── API Keys Tab ──────────────────────────────────────────────────────────────
 
@@ -345,498 +341,6 @@ function ApiKeysTab() {
   );
 }
 
-// ─── Integrations Tab ──────────────────────────────────────────────────────────
-
-const integrationConfigs = [
-  {
-    id: 'klaviyo',
-    name: 'Klaviyo',
-    description: 'Email & SMS marketing — campaigns, flows, lists, and subscriber analytics', // i18n
-    platform: 'klaviyo',
-    fields: [{ label: 'Private API Key', key: 'apiKey', type: 'password' as const, placeholder: 'pk_...' }],
-  },
-  {
-    id: 'telegram',
-    name: 'Telegram',
-    description: 'Recevez des notifications et contrôlez vos agents via Telegram', // i18n: Receive agent notifications and control agents via Telegram
-    platform: 'telegram',
-    fields: [{ label: 'Token du bot', key: 'botToken', type: 'password' as const, placeholder: '1234567890:ABC...' }],
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic Claude',
-    description: 'Modèle IA pour l\'intelligence des agents', // i18n: AI model for agent intelligence
-    platform: 'anthropic',
-    fields: [{ label: 'Clé API', key: 'apiKey', type: 'password' as const, placeholder: 'sk-ant-...' }],
-  },
-];
-
-interface GSCProperty { siteUrl: string; permissionLevel: string; }
-
-function GoogleSearchConsoleCard({ isConnected, onDisconnect }: { isConnected: boolean; onDisconnect: () => void }) {
-  const [properties, setProperties] = useState<GSCProperty[]>([]);
-  const [selectedProperty, setSelectedProperty] = useState<string | null>(null);
-  const [loadingProperties, setLoadingProperties] = useState(false);
-  const [savingProperty, setSavingProperty] = useState(false);
-  const [propertySaved, setPropertySaved] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [propertyError, setPropertyError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isConnected && expanded) loadProperties();
-  }, [isConnected, expanded]);
-
-  const loadProperties = async () => {
-    setLoadingProperties(true);
-    setPropertyError(null);
-    try {
-      const res = await fetch('/api/integrations/gsc/properties');
-      const data = await res.json();
-      if (res.ok) { setProperties(data.sites || []); setSelectedProperty(data.selectedProperty || null); }
-      else setPropertyError(data.error || 'Impossible de charger les propriétés');
-    } catch { setPropertyError('Impossible de charger les propriétés'); }
-    finally { setLoadingProperties(false); }
-  };
-
-  const saveProperty = async (siteUrl: string) => {
-    setSavingProperty(true);
-    try {
-      const res = await fetch('/api/integrations/gsc/properties', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ siteUrl }),
-      });
-      if (res.ok) { setSelectedProperty(siteUrl); setPropertySaved(true); setTimeout(() => setPropertySaved(false), 3000); }
-    } catch { /* noop */ }
-    finally { setSavingProperty(false); }
-  };
-
-  const status = isConnected && selectedProperty ? 'connected' : isConnected ? 'pending' : 'disconnected';
-
-  return (
-    <div className="rounded-2xl border border-[var(--armada-accent)]/50 armada-card overflow-hidden"
-      style={{ backgroundColor: 'var(--armada-surface)' }}>
-      <button onClick={() => setExpanded(!expanded)}
-        className="w-full px-5 py-4 text-left hover:bg-[var(--armada-surface-hover)] transition-colors">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {status === 'connected' ? <CheckCircle2 className="h-4 w-4 text-green-500" />
-              : status === 'pending' ? <AlertCircle className="h-4 w-4 text-yellow-500" />
-              : <Circle className="h-4 w-4 text-[var(--armada-text)]/20" />}
-            <div>
-              <div className="flex items-center gap-2">
-                <Search className="h-3 w-3 text-[#4285F4]" />
-                <h3 className="text-sm font-medium text-[var(--armada-text)] font-mono">Google Search Console</h3>
-              </div>
-              <p className="text-[10px] font-mono text-[var(--armada-text)]/40 mt-0.5">
-                {status === 'connected' ? `Connecté — ${selectedProperty}`
-                  : status === 'pending' ? 'Connecté — sélectionnez une propriété pour Olivia'
-                  : 'Connectez pour donner accès aux données SEO à Olivia'}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full border text-[10px] font-mono ${
-              status === 'connected' ? 'bg-green-500/10 text-green-600 border-green-500/20'
-                : status === 'pending' ? 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20'
-                : 'border-[var(--armada-accent)] text-[var(--armada-text)]/40'
-            }`}>
-              {status === 'connected' ? 'Connecté' : status === 'pending' ? 'Config. requise' : 'Déconnecté'}
-            </span>
-            <ChevronDown className={`h-4 w-4 text-[var(--armada-text)]/30 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-          </div>
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="border-t border-[var(--armada-accent)]/50 p-5 space-y-4">
-          {!isConnected ? (
-            <div className="space-y-3">
-              <p className="text-xs text-[var(--armada-text)]/60 font-mono leading-relaxed">
-                Connectez Google Search Console pour donner à <span style={{ color: 'var(--armada-primary)' }}>Olivia</span> accès aux classements de mots-clés, impressions et données SEO.
-              </p>
-              <a href="/api/auth/google">
-                <button className="flex items-center gap-2 px-4 py-2 rounded-full bg-white hover:bg-gray-100 text-gray-900 text-sm font-medium transition-colors">
-                  <Globe className="h-4 w-4" />Connecter avec Google {/* i18n: Connect with Google */}
-                  <ExternalLink className="h-3 w-3 opacity-60" />
-                </button>
-              </a>
-              <p className="text-[10px] font-mono text-[var(--armada-text)]/30">
-                Lecture seule · scope webmasters.readonly
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-2 block">
-                  Propriété {/* i18n: Property */}
-                </label>
-                {loadingProperties ? (
-                  <div className="flex items-center gap-2 text-xs text-[var(--armada-text)]/40 font-mono">
-                    <Loader2 className="h-4 w-4 animate-spin" />Chargement…
-                  </div>
-                ) : propertyError ? (
-                  <div className="flex items-center gap-2 text-xs text-red-500 font-mono">
-                    <AlertCircle className="h-4 w-4" />{propertyError}
-                  </div>
-                ) : properties.length === 0 ? (
-                  <p className="text-xs text-[var(--armada-text)]/40 font-mono">Aucune propriété trouvée.</p>
-                ) : (
-                  <div className="space-y-2">
-                    <select value={selectedProperty || ''} onChange={(e) => setSelectedProperty(e.target.value)}
-                      className={`${inputClass} appearance-none`}
-                      style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}>
-                      <option value="" disabled>Sélectionner une propriété…</option>
-                      {properties.map((p) => <option key={p.siteUrl} value={p.siteUrl}>{p.siteUrl}</option>)}
-                    </select>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => selectedProperty && saveProperty(selectedProperty)}
-                        disabled={!selectedProperty || savingProperty}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40 armada-btn-primary"
-                        style={{ backgroundColor: 'var(--armada-primary)' }}>
-                        {savingProperty ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Enregistrement…</> : 'Enregistrer'} {/* i18n: Save Property */}
-                      </button>
-                      {propertySaved && (
-                        <span className="flex items-center gap-1 text-green-600 text-xs font-mono">
-                          <CheckCircle2 className="h-3.5 w-3.5" />Enregistré {/* i18n: Saved */}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="pt-2 border-t border-[var(--armada-accent)]/50">
-                <button onClick={onDisconnect}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-full border border-red-500/20 text-red-500 text-xs font-medium hover:bg-red-500/10 transition-colors">
-                  <Unplug className="h-3.5 w-3.5" />Déconnecter {/* i18n: Disconnect */}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── MCP Servers Card ──────────────────────────────────────────────────────────
-// Serveurs MCP externes — le gateway les connecte au démarrage et expose leurs
-// outils aux agents (platform "mcp:<slug>" dans la table Integration).
-
-function McpServersCard({ integrations, onMutate }: { integrations: any[]; onMutate: () => Promise<any> }) {
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
-
-  const mcpServers = integrations.filter((i: any) => i.platform?.startsWith('mcp:'));
-
-  const handleAdd = async () => {
-    const slug = form.slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    if (!slug || !form.url.trim()) {
-      setError('Nom et URL sont requis.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const credentials: Record<string, any> = { url: form.url.trim() };
-      if (form.authHeader.trim()) credentials.headers = { Authorization: form.authHeader.trim() };
-      if (form.category.trim()) credentials.category = form.category.trim();
-      if (form.allowedTools.trim()) {
-        credentials.allowedTools = form.allowedTools.split(',').map(t => t.trim()).filter(Boolean);
-      }
-      const res = await fetch('/api/integrations', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: `mcp:${slug}`, credentials }),
-      });
-      if (!res.ok) throw new Error('Échec de l\'enregistrement');
-      await onMutate();
-      setForm({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
-      setShowForm(false);
-    } catch (e: any) {
-      setError(e?.message || 'Échec de l\'enregistrement');
-    } finally { setSaving(false); }
-  };
-
-  const handleRemove = async (platform: string) => {
-    try { await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' }); await onMutate(); }
-    catch { /* noop */ }
-  };
-
-  const mcpFields = [
-    { key: 'slug', label: 'Nom (slug)', placeholder: 'klaviyo', type: 'text' },
-    { key: 'url', label: 'URL du serveur MCP', placeholder: 'https://mcp.exemple.com/mcp', type: 'text' },
-    { key: 'authHeader', label: 'En-tête Authorization (optionnel)', placeholder: 'Bearer sk_...', type: 'password' },
-    { key: 'category', label: 'Catégorie d\'outils (optionnel)', placeholder: 'marketing — défaut : mcp', type: 'text' },
-    { key: 'allowedTools', label: 'Outils autorisés (optionnel, séparés par des virgules, * accepté)', placeholder: 'get_*, send_campaign', type: 'text' },
-  ] as const;
-
-  return (
-    <div className="rounded-2xl border border-[var(--armada-accent)]/50 armada-card overflow-hidden"
-      style={{ backgroundColor: 'var(--armada-surface)' }}>
-      <div className="px-5 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Server className="h-4 w-4 text-[var(--armada-text)]/40" />
-          <div>
-            <h3 className="text-sm font-medium font-mono text-[var(--armada-text)]">Serveurs MCP</h3>
-            <p className="text-[10px] font-mono text-[var(--armada-text)]/40">
-              Connectez des apps externes via leurs serveurs MCP — les outils sont exposés aux agents sans code
-            </p>
-          </div>
-        </div>
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-3 py-1.5 rounded-full border border-[var(--armada-accent)] text-[10px] font-mono text-[var(--armada-text)]/60 hover:bg-[var(--armada-surface-hover)] transition-colors uppercase tracking-widest">
-          {showForm ? 'Annuler' : '+ Ajouter'}
-        </button>
-      </div>
-
-      {mcpServers.length > 0 && (
-        <div className="border-t border-[var(--armada-accent)]/50">
-          {mcpServers.map((server: any) => (
-            <div key={server.platform}
-              className="px-5 py-3 flex items-center justify-between border-b border-[var(--armada-accent)]/30 last:border-b-0">
-              <div className="flex items-center gap-3">
-                {server.isActive
-                  ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                  : <Circle className="h-3.5 w-3.5 text-[var(--armada-text)]/20" />}
-                <span className="text-xs font-mono text-[var(--armada-text)]/80">
-                  {server.platform.slice(4)}
-                </span>
-              </div>
-              <button onClick={() => handleRemove(server.platform)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-500/20 text-red-500 text-[10px] font-mono hover:bg-red-500/10 transition-colors">
-                <Unplug className="h-3 w-3" />Retirer
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showForm && (
-        <div className="border-t border-[var(--armada-accent)]/50 p-5 space-y-3">
-          {mcpFields.map(field => (
-            <div key={field.key}>
-              <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-1.5 block">
-                {field.label}
-              </label>
-              <input type={field.type} placeholder={field.placeholder}
-                value={form[field.key]}
-                onChange={(e) => setForm(prev => ({ ...prev, [field.key]: e.target.value }))}
-                className={inputClass}
-                style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
-                autoComplete="off" data-lpignore="true" data-1p-ignore
-              />
-            </div>
-          ))}
-          <p className="text-[10px] font-mono text-[var(--armada-text)]/40 leading-relaxed">
-            Par défaut, seuls les outils annotés lecture seule s&apos;exécutent sans approbation — le reste passe par le flux d&apos;approbation (Mission Control / Telegram). Redémarrez le gateway après l&apos;ajout.
-          </p>
-          <div className="flex items-center gap-2 pt-1">
-            <button onClick={handleAdd} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40 armada-btn-primary"
-              style={{ backgroundColor: 'var(--armada-primary)' }}>
-              {saving ? 'Enregistrement…' : 'Connecter le serveur'}
-            </button>
-            {error && (
-              <span className="text-xs text-red-500 font-mono flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" />{error}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function IntegrationsTab() {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Record<string, Record<string, string>>>({});
-  const [saving, setSaving] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<Record<string, 'success' | 'error' | null>>({});
-  const { activeStore } = useActiveStore();
-  const searchParams = useSearchParams();
-
-  const { data, mutate } = useSWR('/api/integrations', (url) => fetch(url).then(r => r.json()));
-
-  const gscParam = searchParams?.get('gsc');
-  const gscError = searchParams?.get('reason');
-
-  useEffect(() => {
-    if (gscParam === 'connected') {
-      mutate();
-    }
-  }, [gscParam, mutate]);
-
-  const integrations = data?.integrations || [];
-
-  const getStatus = (platform: string): 'connected' | 'disconnected' => {
-    const integration = integrations.find((i: any) => i.platform === platform);
-    return integration?.isActive ? 'connected' : 'disconnected';
-  };
-
-  const isGSCConnected = getStatus('google-search-console') === 'connected';
-
-  const handleSave = async (config: typeof integrationConfigs[number]) => {
-    setSaving(config.id);
-    try {
-      const res = await fetch('/api/integrations', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: config.platform, credentials: formData[config.id] || {} }),
-      });
-      if (!res.ok) throw new Error('Failed to save');
-      await mutate();
-      setFormData(prev => ({ ...prev, [config.id]: {} }));
-      setSaveStatus(prev => ({ ...prev, [config.id]: 'success' }));
-      setTimeout(() => setSaveStatus(prev => ({ ...prev, [config.id]: null })), 3000);
-    } catch {
-      setSaveStatus(prev => ({ ...prev, [config.id]: 'error' }));
-    } finally { setSaving(null); }
-  };
-
-  const handleDisconnect = async (platform: string) => {
-    try { await fetch(`/api/integrations?platform=${platform}`, { method: 'DELETE' }); await mutate(); }
-    catch { /* noop */ }
-  };
-
-  return (
-    <div className="space-y-3">
-      {/* Shopify status */}
-      {activeStore ? (
-        <div className="rounded-2xl border border-[var(--armada-accent)]/50 armada-card px-5 py-4 flex items-center justify-between"
-          style={{ backgroundColor: 'var(--armada-surface)' }}>
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
-            <div>
-              <h3 className="text-sm font-medium font-mono text-[var(--armada-text)]">Shopify</h3>
-              <p className="text-[10px] font-mono text-[var(--armada-text)]/40">Connecté : {activeStore.storeName}</p>
-            </div>
-          </div>
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-mono bg-green-500/10 text-green-600 border border-green-500/20">
-            Connecté {/* i18n: Connected */}
-          </span>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-[var(--armada-primary)]/20 px-5 py-4 flex items-center gap-3"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 5%, transparent)' }}>
-          <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--armada-primary)' }} />
-          <p className="text-xs text-[var(--armada-text)]/60 font-mono">
-            Connectez d'abord un magasin — visitez{' '}
-            <span style={{ color: 'var(--armada-primary)' }}>Mes Magasins</span> {/* i18n: Connect a Shopify store first — visit My Store */}
-          </p>
-        </div>
-      )}
-
-      {/* Google Search Console */}
-      {gscParam === 'error' && (
-        <div className="rounded-2xl border border-red-500/20 px-5 py-3 flex items-center gap-3 bg-red-500/5">
-          <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-500" />
-          <p className="text-xs font-mono text-red-400">
-            Google connection failed{gscError ? `: ${gscError}` : ''} — check the server logs and try again.
-          </p>
-        </div>
-      )}
-      {gscParam === 'denied' && (
-        <div className="rounded-2xl border border-yellow-500/20 px-5 py-3 flex items-center gap-3 bg-yellow-500/5">
-          <AlertCircle className="h-4 w-4 flex-shrink-0 text-yellow-500" />
-          <p className="text-xs font-mono text-yellow-400">Google access was denied.</p>
-        </div>
-      )}
-      <GoogleSearchConsoleCard isConnected={isGSCConnected} onDisconnect={() => handleDisconnect('google-search-console')} />
-
-      {/* Other integrations */}
-      {integrationConfigs.map((config) => {
-        const status = getStatus(config.platform);
-        const isExpanded = expandedId === config.id;
-        const isSaving = saving === config.id;
-
-        return (
-          <div key={config.id} className="rounded-2xl border border-[var(--armada-accent)]/50 armada-card overflow-hidden"
-            style={{ backgroundColor: 'var(--armada-surface)' }}>
-            <button onClick={() => setExpandedId(isExpanded ? null : config.id)}
-              className="w-full px-5 py-4 text-left hover:bg-[var(--armada-surface-hover)] transition-colors">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {status === 'connected'
-                    ? <CheckCircle2 className="h-4 w-4 text-green-500" />
-                    : <Circle className="h-4 w-4 text-[var(--armada-text)]/20" />}
-                  <div>
-                    <h3 className="text-sm font-medium font-mono text-[var(--armada-text)]">{config.name}</h3>
-                    <p className="text-[10px] font-mono text-[var(--armada-text)]/40">{config.description}</p>
-                  </div>
-                </div>
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full border text-[10px] font-mono ${
-                  status === 'connected'
-                    ? 'bg-green-500/10 text-green-600 border-green-500/20'
-                    : 'border-[var(--armada-accent)] text-[var(--armada-text)]/40'
-                }`}>
-                  {status === 'connected' ? 'Connecté' : 'Déconnecté'}
-                </span>
-              </div>
-            </button>
-
-            {isExpanded && (
-              <div className="border-t border-[var(--armada-accent)]/50 p-5 space-y-3">
-                {config.fields.map(field => (
-                  <div key={field.key}>
-                    <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-1.5 block">
-                      {field.label}
-                    </label>
-                    <input type={field.type} placeholder={field.placeholder}
-                      value={formData[config.id]?.[field.key] || ''}
-                      onChange={(e) => setFormData(prev => ({ ...prev, [config.id]: { ...prev[config.id], [field.key]: e.target.value } }))}
-                      className={inputClass}
-                      style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
-                      autoComplete="off"
-                      data-lpignore="true"
-                      data-1p-ignore
-                    />
-                  </div>
-                ))}
-                <div className="flex items-center gap-2 pt-1">
-                  <button onClick={() => handleSave(config)} disabled={isSaving}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40 armada-btn-primary"
-                    style={{ backgroundColor: 'var(--armada-primary)' }}>
-                    {isSaving ? 'Enregistrement…' : status === 'connected' ? 'Mettre à jour' : 'Connecter'} {/* i18n: Saving... / Update / Connect */}
-                  </button>
-                  {status === 'connected' && (
-                    <button onClick={() => handleDisconnect(config.platform)}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-full border border-red-500/20 text-red-500 text-xs font-medium hover:bg-red-500/10 transition-colors">
-                      Déconnecter {/* i18n: Disconnect */}
-                    </button>
-                  )}
-                  {saveStatus[config.id] === 'success' && (
-                    <span className="text-xs text-green-600 font-mono flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3" />Enregistré {/* i18n: Saved */}
-                    </span>
-                  )}
-                  {saveStatus[config.id] === 'error' && (
-                    <span className="text-xs text-red-500 font-mono flex items-center gap-1">
-                      <AlertCircle className="h-3 w-3" />Échec {/* i18n: Failed */}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* MCP servers */}
-      <McpServersCard integrations={integrations} onMutate={mutate} />
-
-      {/* Security notice */}
-      <div className="rounded-2xl border border-[var(--armada-primary)]/20 px-5 py-4 flex items-start gap-3"
-        style={{ backgroundColor: 'color-mix(in srgb, var(--armada-primary) 5%, transparent)' }}>
-        <Key className="h-4 w-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--armada-primary)' }} />
-        <p className="text-[10px] font-mono text-[var(--armada-text)]/50 leading-relaxed">
-          Tous les identifiants et tokens OAuth sont chiffrés au repos avec AES-256. L'accès Google est en lecture seule. Les tokens sont rafraîchis automatiquement. {/* i18n: All credentials... */}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ─── Platform Tab ──────────────────────────────────────────────────────────────
 
 function PlatformTab() {
@@ -882,17 +386,14 @@ function PlatformTab() {
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'api-keys',     label: 'Clés API' },       // i18n: API Keys
-  { id: 'integrations', label: 'Intégrations' },   // i18n: Integrations
-  { id: 'platform',     label: 'Plateforme' },      // i18n: Platform
+  { id: 'api-keys', label: 'Clés API' },       // i18n: API Keys
+  { id: 'platform', label: 'Plateforme' },      // i18n: Platform
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
 
 function SettingsContent() {
-  const searchParams = useSearchParams();
-  const initialTab = (searchParams?.get('tab') === 'integrations' ? 'integrations' : 'api-keys') as TabId;
-  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [activeTab, setActiveTab] = useState<TabId>('api-keys');
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}>
@@ -906,8 +407,13 @@ function SettingsContent() {
           Configuration {/* i18n: Settings */}
         </h1>
         <p className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mt-0.5">
-          Paramètres de la plateforme et intégrations {/* i18n: Platform configuration and integrations */}
+          Modèles IA et paramètres de la plateforme {/* i18n: AI models and platform settings */}
         </p>
+        <Link href="/integrations"
+          className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full border border-[var(--armada-accent)] text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] hover:bg-[var(--armada-surface-hover)] transition-colors">
+          <Plug className="h-3 w-3" />
+          Apps &amp; MCP — page Apps
+        </Link>
       </div>
 
       {/* ── Tabs ── */}
@@ -941,9 +447,8 @@ function SettingsContent() {
 
       {/* ── Content ── */}
       <div className="p-6 max-w-3xl">
-        {activeTab === 'api-keys'     && <ApiKeysTab />}
-        {activeTab === 'integrations' && <IntegrationsTab />}
-        {activeTab === 'platform'     && <PlatformTab />}
+        {activeTab === 'api-keys' && <ApiKeysTab />}
+        {activeTab === 'platform' && <PlatformTab />}
       </div>
     </div>
   );

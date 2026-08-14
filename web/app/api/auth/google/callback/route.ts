@@ -35,7 +35,7 @@ function verifyState(state: string): { userId: string } | null {
 export async function GET(request: NextRequest) {
   const origin = new URL(request.url).origin;
   const REDIRECT_URI = `${origin}/api/auth/google/callback`;
-  const settings = `${origin}/settings?tab=integrations`;
+  const settings = `${origin}/integrations`;
 
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get('code');

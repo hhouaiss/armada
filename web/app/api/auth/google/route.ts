@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.redirect(
-      new URL('/login?next=' + encodeURIComponent('/settings?tab=integrations'), request.url)
+      new URL('/login?next=' + encodeURIComponent('/integrations'), request.url)
     );
   }
 

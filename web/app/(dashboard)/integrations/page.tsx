@@ -2,227 +2,51 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import Link from 'next/link';
 import {
-  Check, ExternalLink, Key, Loader2, Search, X,
-  Globe, MessageSquare, ShoppingBag, BarChart2, Code2, CreditCard, Megaphone,
+  Check, ExternalLink, Key, Loader2, Search, X, Plug,
+  Globe, ShoppingBag, Server, AlertCircle, Unplug, Plus,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import { cn } from '@/lib/utils';
+import {
+  CATALOG, CATALOG_CATEGORIES, buildMcpCredentials, type CatalogApp,
+} from '@/lib/mcp-catalog';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
 
-// ── Integration catalog ────────────────────────────────────────────────────────
+const inputClass = 'w-full rounded-xl border border-[var(--armada-accent)]/60 px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 transition-colors';
+const inputStyle = { backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' } as const;
 
-interface AppDef {
-  id: string;
-  name: string;
-  description: string;
-  logo: string;          // emoji or initials
-  category: string;
-  authType: 'oauth' | 'apikey' | 'webhook';
-  oauthPath?: string;    // e.g. /api/auth/google
-  docsUrl?: string;
-  badge?: string;        // 'Connecté', 'Bientôt', etc.
-  tier?: 'core';         // 'core' = part of the ecommerce stack (shown first)
-}
+// ── Connect modal (MCP + native) ──────────────────────────────────────────────
 
-// Ecommerce-first ordering: the store stack leads, generic tools follow.
-const CATEGORIES = [
-  { id: 'all',          label: 'Tout',           icon: Globe },
-  { id: 'ecommerce',    label: 'E-commerce',     icon: ShoppingBag },
-  { id: 'marketing',    label: 'Marketing & Ads',icon: Megaphone },
-  { id: 'analytics',    label: 'Analytics & SEO',icon: BarChart2 },
-  { id: 'finance',      label: 'Finance',        icon: CreditCard },
-  { id: 'communication',label: 'Communication',  icon: MessageSquare },
-  { id: 'productivity', label: 'Productivité',   icon: Globe },
-  { id: 'dev',          label: 'Dev / Tech',     icon: Code2 },
-];
-
-const APPS: AppDef[] = [
-  // ── Ecommerce stack (core) ──
-  {
-    id: 'shopify',
-    name: 'Shopify',
-    description: 'Connectez votre boutique pour que vos agents gèrent produits, stocks et commandes.',
-    logo: '🛍️',
-    category: 'ecommerce',
-    authType: 'oauth',
-    oauthPath: '/api/shopify/install',
-    tier: 'core',
-  },
-  {
-    id: 'klaviyo',
-    name: 'Klaviyo',
-    description: 'Campagnes et flows email/SMS : panier abandonné, winback, fidélité.',
-    logo: 'K',
-    category: 'marketing',
-    authType: 'apikey',
-    tier: 'core',
-  },
-  {
-    id: 'gsc',
-    name: 'Google Search Console',
-    description: 'Analysez vos performances SEO, mots-clés et positions produit.',
-    logo: '🔍',
-    category: 'analytics',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    tier: 'core',
-  },
-  {
-    id: 'ga4',
-    name: 'Google Analytics',
-    description: 'Suivez le trafic, les conversions et le tunnel d\'achat.',
-    logo: '📊',
-    category: 'analytics',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    badge: 'Bientôt',
-    tier: 'core',
-  },
-  {
-    id: 'meta-ads',
-    name: 'Meta Ads',
-    description: 'Pilotez vos campagnes Facebook & Instagram et suivez le ROAS.',
-    logo: 'f',
-    category: 'marketing',
-    authType: 'oauth',
-    oauthPath: '/api/auth/meta',
-    badge: 'Bientôt',
-    tier: 'core',
-  },
-  {
-    id: 'google-ads',
-    name: 'Google Ads',
-    description: 'Gérez vos campagnes Search & Shopping et optimisez le ROAS.',
-    logo: 'G',
-    category: 'marketing',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    badge: 'Bientôt',
-    tier: 'core',
-  },
-  {
-    id: 'stripe',
-    name: 'Stripe',
-    description: 'Consultez vos paiements, abonnements et revenus.',
-    logo: 'S',
-    category: 'finance',
-    authType: 'apikey',
-    badge: 'Bientôt',
-    tier: 'core',
-  },
-  {
-    id: 'telegram',
-    name: 'Telegram',
-    description: 'Recevez les alertes de vos agents et pilotez votre boutique au chat.',
-    logo: '✈️',
-    category: 'communication',
-    authType: 'apikey',
-    tier: 'core',
-  },
-  // ── Autres outils (secondary) ──
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    description: 'Lisez, rédigez et envoyez des emails via Gmail.',
-    logo: 'M',
-    category: 'communication',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-    badge: 'Bientôt',
-  },
-  {
-    id: 'slack',
-    name: 'Slack',
-    description: 'Envoyez des messages dans vos canaux Slack.',
-    logo: '#',
-    category: 'communication',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-  {
-    id: 'notion',
-    name: 'Notion',
-    description: 'Créez et consultez des pages, gérez vos bases de données.',
-    logo: 'N',
-    category: 'productivity',
-    authType: 'apikey',
-  },
-  {
-    id: 'google-drive',
-    name: 'Google Drive',
-    description: 'Lisez et créez des fichiers, partagez des documents.',
-    logo: '📁',
-    category: 'productivity',
-    authType: 'oauth',
-    oauthPath: '/api/auth/google',
-  },
-  {
-    id: 'trello',
-    name: 'Trello',
-    description: 'Gérez vos tableaux, listes et cartes Trello.',
-    logo: 'T',
-    category: 'productivity',
-    authType: 'apikey',
-  },
-  {
-    id: 'airtable',
-    name: 'Airtable',
-    description: 'Lisez et écrivez dans vos bases Airtable.',
-    logo: 'A',
-    category: 'productivity',
-    authType: 'apikey',
-  },
-  {
-    id: 'asana',
-    name: 'Asana',
-    description: 'Créez des tâches, suivez les projets et deadlines.',
-    logo: '⬡',
-    category: 'productivity',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-  {
-    id: 'github',
-    name: 'GitHub',
-    description: 'Consultez les repos, issues et pull requests.',
-    logo: 'GH',
-    category: 'dev',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-  {
-    id: 'linear',
-    name: 'Linear',
-    description: 'Créez et suivez des tickets, sprints et projets.',
-    logo: 'L',
-    category: 'dev',
-    authType: 'apikey',
-    badge: 'Bientôt',
-  },
-];
-
-// ── API Key modal ──────────────────────────────────────────────────────────────
-
-function ApiKeyModal({
-  app,
-  onClose,
-  onSave,
+function ConnectModal({
+  app, onClose, onSave,
 }: {
-  app: AppDef;
+  app: CatalogApp;
   onClose: () => void;
-  onSave: (apiKey: string) => Promise<void>;
+  onSave: (values: Record<string, string>) => Promise<void>;
 }) {
-  const [apiKey, setApiKey] = useState('');
+  const fields = app.kind === 'mcp'
+    ? app.mcp!.secrets.map(s => ({ key: s.key, label: s.label, placeholder: s.placeholder }))
+    : (app.nativeFields || []);
+  const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const allFilled = fields.every(f => (values[f.key] || '').trim());
 
   const handleSave = async () => {
-    if (!apiKey.trim()) return;
     setSaving(true);
-    await onSave(apiKey.trim());
-    setSaving(false);
-    onClose();
+    setError(null);
+    try {
+      await onSave(values);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Échec de la connexion');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -234,47 +58,59 @@ function ApiKeyModal({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-serif text-lg text-[var(--armada-text)]">Connecter {app.name}</h3>
-            <p className="text-xs text-[var(--armada-text)]/50 mt-0.5">Entrez votre clé API</p>
+            <p className="text-xs text-[var(--armada-text)]/50 mt-0.5">
+              {app.kind === 'mcp' ? 'Connexion via MCP — vos agents auront accès à ses outils.' : 'Entrez vos identifiants.'}
+            </p>
           </div>
           <button onClick={onClose} className="text-[var(--armada-text)]/40 hover:text-[var(--armada-text)] transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--armada-text)]/50">
-            Clé API {app.name} <span className="text-[var(--armada-primary)]">*</span>
-          </label>
-          <div className="relative">
-            <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--armada-text)]/30" />
-            <input
-              type="password"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="w-full pl-9 pr-4 py-3 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 transition-colors"
-              style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
-              autoFocus
-            />
+        {fields.map(field => (
+          <div key={field.key} className="space-y-2">
+            <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--armada-text)]/50">
+              {field.label} <span className="text-[var(--armada-primary)]">*</span>
+            </label>
+            <div className="relative">
+              <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--armada-text)]/30" />
+              <input
+                type="password"
+                value={values[field.key] || ''}
+                onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
+                placeholder={field.placeholder}
+                className={cn(inputClass, 'pl-9')}
+                style={inputStyle}
+                autoComplete="off" data-lpignore="true" data-1p-ignore
+              />
+            </div>
           </div>
-          <p className="text-[10px] text-[var(--armada-text)]/30 font-mono">
-            Votre clé est chiffrée et stockée de façon sécurisée.
-          </p>
-        </div>
+        ))}
+
+        <p className="text-[10px] text-[var(--armada-text)]/30 font-mono">
+          Chiffré (AES-256) et stocké de façon sécurisée. Les outils apparaissent au prochain démarrage du gateway.
+        </p>
+        {app.docsUrl && (
+          <a href={app.docsUrl} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 text-[10px] font-mono text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]">
+            <ExternalLink className="h-3 w-3" />Documentation {app.name}
+          </a>
+        )}
+
+        {error && (
+          <div className="flex items-center gap-2 text-xs text-red-500 font-mono">
+            <AlertCircle className="h-3.5 w-3.5" />{error}
+          </div>
+        )}
 
         <div className="flex gap-2">
-          <button
-            onClick={onClose}
-            className="flex-1 py-2.5 rounded-full border border-[var(--armada-accent)] text-sm text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] transition-colors"
-          >
+          <button onClick={onClose}
+            className="flex-1 py-2.5 rounded-full border border-[var(--armada-accent)] text-sm text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] transition-colors">
             Annuler
           </button>
-          <button
-            onClick={handleSave}
-            disabled={!apiKey.trim() || saving}
+          <button onClick={handleSave} disabled={!allFilled || saving}
             className="flex-1 py-2.5 rounded-full text-white text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40"
-            style={{ backgroundColor: 'var(--armada-primary)' }}
-          >
+            style={{ backgroundColor: 'var(--armada-primary)' }}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : 'Connecter'}
           </button>
         </div>
@@ -283,108 +119,143 @@ function ApiKeyModal({
   );
 }
 
-// ── App card ─────────────────────────────────────────────────────────────────
+// ── Custom MCP server form ────────────────────────────────────────────────────
+
+function CustomMcpForm({ onDone }: { onDone: () => Promise<any> }) {
+  const [form, setForm] = useState({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleAdd = async () => {
+    const slug = form.slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    if (!slug || !form.url.trim()) { setError('Nom et URL sont requis.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const credentials: Record<string, any> = { url: form.url.trim() };
+      if (form.authHeader.trim()) credentials.headers = { Authorization: form.authHeader.trim() };
+      if (form.category.trim()) credentials.category = form.category.trim();
+      if (form.allowedTools.trim()) {
+        credentials.allowedTools = form.allowedTools.split(',').map(t => t.trim()).filter(Boolean);
+      }
+      const res = await fetch('/api/integrations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform: `mcp:${slug}`, credentials }),
+      });
+      if (!res.ok) throw new Error('Échec de l\'enregistrement');
+      await onDone();
+      setForm({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
+    } catch (e: any) {
+      setError(e?.message || 'Échec de l\'enregistrement');
+    } finally { setSaving(false); }
+  };
+
+  const fields = [
+    { key: 'slug', label: 'Nom (slug)', placeholder: 'mon-serveur', type: 'text' },
+    { key: 'url', label: 'URL du serveur MCP (Streamable HTTP)', placeholder: 'https://mcp.exemple.com/mcp', type: 'text' },
+    { key: 'authHeader', label: 'En-tête Authorization (optionnel)', placeholder: 'Bearer sk_…', type: 'password' },
+    { key: 'category', label: 'Catégorie d\'outils (optionnel)', placeholder: 'marketing — défaut : mcp', type: 'text' },
+    { key: 'allowedTools', label: 'Outils autorisés (optionnel, virgules, * accepté)', placeholder: 'get_*, send_campaign', type: 'text' },
+  ] as const;
+
+  return (
+    <div className="space-y-3">
+      {fields.map(field => (
+        <div key={field.key}>
+          <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-1.5 block">
+            {field.label}
+          </label>
+          <input type={field.type} placeholder={field.placeholder}
+            value={form[field.key]}
+            onChange={e => setForm(prev => ({ ...prev, [field.key]: e.target.value }))}
+            className={inputClass} style={inputStyle}
+            autoComplete="off" data-lpignore="true" data-1p-ignore
+          />
+        </div>
+      ))}
+      <div className="flex items-center gap-2 pt-1">
+        <button onClick={handleAdd} disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40"
+          style={{ backgroundColor: 'var(--armada-primary)' }}>
+          {saving ? 'Connexion…' : 'Connecter le serveur'}
+        </button>
+        {error && (
+          <span className="text-xs text-red-500 font-mono flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />{error}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── App card ──────────────────────────────────────────────────────────────────
 
 function AppCard({
-  app, isConnected, isConnecting, onConnect, onDisconnect,
+  app, isConnected, onConnect, onDisconnect,
 }: {
-  app: AppDef;
+  app: CatalogApp;
   isConnected: boolean;
-  isConnecting: boolean;
-  onConnect: (app: AppDef) => void;
-  onDisconnect: (id: string) => void;
+  onConnect: (app: CatalogApp) => void;
+  onDisconnect: (app: CatalogApp) => void;
 }) {
-  const isSoon = app.badge === 'Bientôt';
   return (
     <div
       className={cn(
         'relative rounded-2xl border transition-all duration-200 overflow-hidden',
         isConnected
           ? 'border-[var(--armada-primary)]/30'
-          : isSoon
-            ? 'border-[var(--armada-accent)]/30 opacity-60'
-            : 'border-[var(--armada-accent)]/50 hover:border-[var(--armada-primary)]/20'
+          : 'border-[var(--armada-accent)]/50 hover:border-[var(--armada-primary)]/20'
       )}
       style={{ backgroundColor: 'var(--armada-surface)' }}
     >
-      {/* Connected accent */}
       {isConnected && (
         <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ backgroundColor: 'var(--armada-primary)' }} />
       )}
 
       <div className="p-4 space-y-3">
-        {/* Logo + name */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-3">
-            <div
-              className="w-10 h-10 rounded-xl border border-[var(--armada-accent)]/50 flex items-center justify-center text-base font-bold shrink-0"
-              style={{ backgroundColor: 'var(--armada-bg)' }}
-            >
+            <div className="w-10 h-10 rounded-xl border border-[var(--armada-accent)]/50 flex items-center justify-center text-base font-bold shrink-0"
+              style={{ backgroundColor: 'var(--armada-bg)' }}>
               {app.logo}
             </div>
             <div>
               <div className="text-sm font-medium text-[var(--armada-text)]">{app.name}</div>
               <div className="text-[9px] font-mono uppercase tracking-widest text-[var(--armada-text)]/30">
-                {CATEGORIES.find(c => c.id === app.category)?.label || app.category}
+                {app.kind === 'mcp' ? 'via MCP' : app.kind === 'shopify' ? 'API Shopify' : CATALOG_CATEGORIES.find(c => c.id === app.category)?.label}
               </div>
             </div>
           </div>
-
-          {/* Status badges */}
           {isConnected && (
-            <span
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
-              style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}
-            >
-              <Check className="h-2.5 w-2.5" />
-              Connecté
-            </span>
-          )}
-          {isSoon && !isConnected && (
-            <span className="px-2 py-0.5 rounded-full text-[9px] font-mono border border-[var(--armada-accent)]/40 text-[var(--armada-text)]/30 shrink-0">
-              Bientôt
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
+              style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}>
+              <Check className="h-2.5 w-2.5" />Connecté
             </span>
           )}
         </div>
 
-        {/* Description */}
-        <p className="text-xs text-[var(--armada-text)]/55 leading-relaxed">
-          {app.description}
-        </p>
+        <p className="text-xs text-[var(--armada-text)]/55 leading-relaxed">{app.description}</p>
 
-        {/* Action */}
-        {isConnected ? (
+        {app.kind === 'shopify' ? (
+          <Link href="/stores"
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs font-medium text-[var(--armada-text)]/70 hover:text-[var(--armada-text)] transition-colors">
+            <ShoppingBag className="h-3 w-3" />
+            {isConnected ? 'Gérer depuis Boutiques' : 'Connecter depuis Boutiques'}
+          </Link>
+        ) : isConnected ? (
           <div className="flex gap-2">
-            <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">
-              Actif
-            </span>
-            <button
-              onClick={() => onDisconnect(app.id)}
-              className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
-            >
+            <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">Actif</span>
+            <button onClick={() => onDisconnect(app)}
+              className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors">
               Déconnecter
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => onConnect(app)}
-            disabled={isSoon || isConnecting}
-            className={cn(
-              'w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium transition-all',
-              isSoon
-                ? 'border border-[var(--armada-accent)]/30 text-[var(--armada-text)]/30 cursor-not-allowed'
-                : 'text-white hover:opacity-90'
-            )}
-            style={!isSoon ? { backgroundColor: 'var(--armada-primary)' } : {}}
-          >
-            {isConnecting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <>
-                {app.authType === 'apikey' ? <Key className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
-                {isSoon ? 'Disponible bientôt' : 'Connecter'}
-              </>
-            )}
+          <button onClick={() => onConnect(app)}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium text-white hover:opacity-90 transition-all"
+            style={{ backgroundColor: 'var(--armada-primary)' }}>
+            <Plug className="h-3 w-3" />Connecter
           </button>
         )}
       </div>
@@ -392,195 +263,170 @@ function AppCard({
   );
 }
 
-// ── Main page ──────────────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function IntegrationsPage() {
-  const { activeStoreId } = useActiveStore();
+  const { activeStore, activeStoreId } = useActiveStore();
   const [activeCategory, setActiveCategory] = useState('all');
   const [search, setSearch] = useState('');
-  const [modalApp, setModalApp] = useState<AppDef | null>(null);
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const [modalApp, setModalApp] = useState<CatalogApp | null>(null);
+  const [showCustomForm, setShowCustomForm] = useState(false);
 
-  const { data: integrationsData, mutate } = useSWR(
+  const { data, mutate } = useSWR(
     activeStoreId ? `/api/integrations?storeId=${activeStoreId}` : '/api/integrations',
     fetcher
   );
 
-  const connected: string[] = (integrationsData?.integrations || [])
-    .filter((i: any) => i.isActive)
-    .map((i: any) => i.platform);
+  const integrations: any[] = (data?.integrations || []).filter((i: any) => i.isActive);
+  const connectedPlatforms = new Set(integrations.map((i: any) => i.platform));
 
-  const filtered = APPS.filter(app => {
+  const catalogSlugs = new Set(CATALOG.map(a => `mcp:${a.slug}`));
+  const customServers = integrations.filter(
+    (i: any) => i.platform?.startsWith('mcp:') && !catalogSlugs.has(i.platform)
+  );
+
+  const isAppConnected = (app: CatalogApp) =>
+    app.kind === 'shopify' ? Boolean(activeStore)
+      : app.kind === 'mcp' ? connectedPlatforms.has(`mcp:${app.slug}`)
+      : connectedPlatforms.has(app.nativePlatform || app.slug);
+
+  const filtered = CATALOG.filter(app => {
     const matchCat = activeCategory === 'all' || app.category === activeCategory;
-    const matchSearch = !search || app.name.toLowerCase().includes(search.toLowerCase()) || app.description.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = !search
+      || app.name.toLowerCase().includes(search.toLowerCase())
+      || app.description.toLowerCase().includes(search.toLowerCase());
     return matchCat && matchSearch;
   });
 
-  // In the default "Tout" view, lead with the ecommerce stack, then other tools.
-  const isAllView = activeCategory === 'all' && !search;
-  const coreApps = filtered.filter(a => a.tier === 'core');
-  const otherApps = filtered.filter(a => a.tier !== 'core');
+  const connectedCount = CATALOG.filter(isAppConnected).length + customServers.length;
 
-  const handleConnect = async (app: AppDef) => {
-    if (app.badge === 'Bientôt') return;
-    if (app.authType === 'apikey') {
-      setModalApp(app);
-    } else if (app.authType === 'oauth' && app.oauthPath) {
-      setConnecting(app.id);
-      window.location.href = app.oauthPath;
-    }
+  const handleSave = async (app: CatalogApp, values: Record<string, string>) => {
+    const platform = app.kind === 'mcp' ? `mcp:${app.slug}` : (app.nativePlatform || app.slug);
+    const credentials = app.kind === 'mcp' ? buildMcpCredentials(app, values) : values;
+    const res = await fetch('/api/integrations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, credentials, storeId: activeStoreId }),
+    });
+    if (!res.ok) throw new Error('Échec de la connexion');
+    await mutate();
   };
 
-  const handleSaveApiKey = async (apiKey: string) => {
-    if (!modalApp) return;
-    await fetch('/api/integrations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: modalApp.id,
-        credentials: { apiKey },
-        storeId: activeStoreId,
-      }),
-    });
+  const disconnectPlatform = async (platform: string) => {
+    await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' });
     mutate();
   };
 
-  const handleDisconnect = async (appId: string) => {
-    await fetch(`/api/integrations/${appId}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storeId: activeStoreId }),
-    });
-    mutate();
+  const handleDisconnect = (app: CatalogApp) => {
+    const platform = app.kind === 'mcp' ? `mcp:${app.slug}` : (app.nativePlatform || app.slug);
+    disconnectPlatform(platform);
   };
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}>
       {/* ── Header ── */}
-      <div
-        className="border-b border-[var(--armada-accent)]/50 px-4 md:px-6 py-4 md:py-5"
-        style={{ backgroundColor: 'var(--armada-surface)' }}
-      >
+      <div className="border-b border-[var(--armada-accent)]/50 px-4 md:px-6 py-4 md:py-5"
+        style={{ backgroundColor: 'var(--armada-surface)' }}>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="font-serif tracking-tight text-xl md:text-2xl text-[var(--armada-text)]">Apps</h1>
             <p className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mt-0.5">
-              Connectez vos outils — {connected.length} app{connected.length !== 1 ? 's' : ''} active{connected.length !== 1 ? 's' : ''}
+              Vos agents accèdent aux apps via MCP — {connectedCount} connectée{connectedCount !== 1 ? 's' : ''}
             </p>
           </div>
-
-          {/* Search */}
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--armada-text)]/30" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Rechercher une app…"
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-[var(--armada-accent)]/60 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 transition-colors"
-              style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}
-            />
+              className={cn(inputClass, 'pl-9')} style={inputStyle} />
           </div>
         </div>
 
-        {/* Category tabs */}
         <div className="flex gap-1.5 mt-4 overflow-x-auto pb-1">
-          {CATEGORIES.map(cat => (
-            <button
-              key={cat.id}
-              onClick={() => setActiveCategory(cat.id)}
+          {CATALOG_CATEGORIES.map(cat => (
+            <button key={cat.id} onClick={() => setActiveCategory(cat.id)}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono whitespace-nowrap transition-colors',
                 activeCategory === cat.id
                   ? 'text-[var(--armada-text)]'
                   : 'text-[var(--armada-text)]/50 hover:text-[var(--armada-text)] hover:bg-[var(--armada-surface-hover)]'
               )}
-              style={activeCategory === cat.id ? {
-                backgroundColor: 'var(--armada-text)',
-                color: 'var(--armada-bg)',
-              } : {}}
-            >
+              style={activeCategory === cat.id ? { backgroundColor: 'var(--armada-text)', color: 'var(--armada-bg)' } : {}}>
               {cat.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ── Grid ── */}
       <div className="p-4 md:p-6 space-y-8">
+        {/* ── Catalog grid ── */}
         {filtered.length === 0 ? (
           <div className="text-center py-16">
             <p className="text-sm text-[var(--armada-text)]/40">Aucune app trouvée</p>
           </div>
-        ) : isAllView ? (
-          <>
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <ShoppingBag className="h-3.5 w-3.5 text-[var(--armada-primary)]" />
-                <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
-                  Stack e-commerce
-                </h2>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {coreApps.map(app => (
-                  <AppCard
-                    key={app.id}
-                    app={app}
-                    isConnected={connected.includes(app.id)}
-                    isConnecting={connecting === app.id}
-                    onConnect={handleConnect}
-                    onDisconnect={handleDisconnect}
-                  />
-                ))}
-              </div>
-            </section>
-
-            {otherApps.length > 0 && (
-              <section className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Globe className="h-3.5 w-3.5 text-[var(--armada-text)]/40" />
-                  <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
-                    Autres outils
-                  </h2>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {otherApps.map(app => (
-                    <AppCard
-                      key={app.id}
-                      app={app}
-                      isConnected={connected.includes(app.id)}
-                      isConnecting={connecting === app.id}
-                      onConnect={handleConnect}
-                      onDisconnect={handleDisconnect}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map(app => (
-              <AppCard
-                key={app.id}
-                app={app}
-                isConnected={connected.includes(app.id)}
-                isConnecting={connecting === app.id}
-                onConnect={handleConnect}
+              <AppCard key={app.slug} app={app}
+                isConnected={isAppConnected(app)}
+                onConnect={setModalApp}
                 onDisconnect={handleDisconnect}
               />
             ))}
           </div>
         )}
+
+        {/* ── Custom MCP servers ── */}
+        <section className="space-y-3 max-w-2xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server className="h-3.5 w-3.5 text-[var(--armada-text)]/40" />
+              <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
+                Serveurs MCP personnalisés
+              </h2>
+            </div>
+            <button onClick={() => setShowCustomForm(v => !v)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-[var(--armada-accent)] text-[10px] font-mono text-[var(--armada-text)]/60 hover:bg-[var(--armada-surface-hover)] transition-colors uppercase tracking-widest">
+              {showCustomForm ? <><X className="h-3 w-3" />Annuler</> : <><Plus className="h-3 w-3" />Ajouter</>}
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-[var(--armada-accent)]/50 overflow-hidden"
+            style={{ backgroundColor: 'var(--armada-surface)' }}>
+            {customServers.length === 0 && !showCustomForm && (
+              <p className="px-5 py-4 text-xs text-[var(--armada-text)]/40">
+                Connectez n&apos;importe quel serveur MCP (URL Streamable HTTP) — ses outils seront exposés à vos agents.
+              </p>
+            )}
+            {customServers.map((server: any) => (
+              <div key={server.platform}
+                className="px-5 py-3 flex items-center justify-between border-b border-[var(--armada-accent)]/30 last:border-b-0">
+                <div className="flex items-center gap-3">
+                  <Globe className="h-3.5 w-3.5 text-green-500" />
+                  <span className="text-xs font-mono text-[var(--armada-text)]/80">{server.platform.slice(4)}</span>
+                </div>
+                <button onClick={() => disconnectPlatform(server.platform)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-500/20 text-red-500 text-[10px] font-mono hover:bg-red-500/10 transition-colors">
+                  <Unplug className="h-3 w-3" />Retirer
+                </button>
+              </div>
+            ))}
+            {showCustomForm && (
+              <div className={cn('p-5', customServers.length > 0 && 'border-t border-[var(--armada-accent)]/50')}>
+                <CustomMcpForm onDone={async () => { await mutate(); setShowCustomForm(false); }} />
+              </div>
+            )}
+          </div>
+
+          <p className="text-[10px] font-mono text-[var(--armada-text)]/40 leading-relaxed">
+            Par défaut, seuls les outils annotés lecture seule s&apos;exécutent sans approbation — le reste passe
+            par le flux d&apos;approbation (Mission Control / Telegram). Redémarrez le gateway après un ajout.
+          </p>
+        </section>
       </div>
 
-      {/* API Key Modal */}
       {modalApp && (
-        <ApiKeyModal
-          app={modalApp}
-          onClose={() => setModalApp(null)}
-          onSave={handleSaveApiKey}
-        />
+        <ConnectModal app={modalApp} onClose={() => setModalApp(null)}
+          onSave={values => handleSave(modalApp, values)} />
       )}
     </div>
   );
