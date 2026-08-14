@@ -2,15 +2,26 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createServerClient } from '@supabase/ssr';
 
-const SCOPES = [
-  'https://www.googleapis.com/auth/webmasters.readonly',
-  'https://www.googleapis.com/auth/userinfo.email',
-].join(' ');
+import { CATALOG } from '@/lib/mcp-catalog';
 
-function createSignedState(userId: string): string {
+const BASE_SCOPES = ['https://www.googleapis.com/auth/userinfo.email'];
+
+/**
+ * Scopes par app. Google Search Console reste servi par les tools natifs du
+ * gateway ; les autres apps Google déclarent leurs scopes dans le catalogue.
+ */
+function scopesFor(slug: string): string[] | null {
+  if (slug === 'google-search-console') {
+    return ['https://www.googleapis.com/auth/webmasters.readonly'];
+  }
+  const app = CATALOG.find((a) => a.slug === slug);
+  return app?.mcp?.googleScopes ?? null;
+}
+
+function createSignedState(userId: string, slug: string): string {
   const nonce = crypto.randomBytes(16).toString('hex');
   const ts = Date.now().toString();
-  const payload = `${userId}|${nonce}|${ts}`;
+  const payload = `${userId}|${nonce}|${ts}|${slug}`;
   const sig = crypto
     .createHmac('sha256', process.env.ENCRYPTION_KEY!)
     .update(payload)
@@ -44,13 +55,21 @@ export async function GET(request: NextRequest) {
 
   const origin = new URL(request.url).origin;
   const REDIRECT_URI = `${origin}/api/auth/google/callback`;
-  const state = createSignedState(user.id);
+
+  // Défaut rétrocompatible : sans `slug`, c'est l'ancien flow Search Console.
+  const slug = request.nextUrl.searchParams.get('slug') || 'google-search-console';
+  const scopes = scopesFor(slug);
+  if (!scopes) {
+    return NextResponse.redirect(`${origin}/integrations?mcp=error&slug=${slug}&reason=unknown_google_app`);
+  }
+
+  const state = createSignedState(user.id, slug);
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
   authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
   authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('scope', SCOPES);
+  authUrl.searchParams.set('scope', [...scopes, ...BASE_SCOPES].join(' '));
   authUrl.searchParams.set('access_type', 'offline');
   authUrl.searchParams.set('prompt', 'select_account consent');
   authUrl.searchParams.set('state', state);

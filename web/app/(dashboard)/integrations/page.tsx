@@ -1,16 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import Link from 'next/link';
 import {
   Check, ExternalLink, Key, Loader2, Search, X, Plug,
-  Globe, ShoppingBag, Server, AlertCircle, Unplug, Plus,
+  Globe, ShoppingBag, Server, AlertCircle, Unplug, Plus, RefreshCw,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import { cn } from '@/lib/utils';
 import {
-  CATALOG, CATALOG_CATEGORIES, buildMcpCredentials, type CatalogApp,
+  CATALOG, CATALOG_CATEGORIES, buildMcpCredentials, connectUrlFor, type CatalogApp,
 } from '@/lib/mcp-catalog';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
@@ -201,6 +201,8 @@ function AppCard({
   onDisconnect: (app: CatalogApp) => void;
 }) {
   const hasError = isConnected && app.kind === 'mcp' && mcpInfo?.status === 'error';
+  const needsReauth = mcpInfo?.status === 'reauth_required';
+  const oneClick = Boolean(connectUrlFor(app));
   return (
     <div
       className={cn(
@@ -229,7 +231,13 @@ function AppCard({
               </div>
             </div>
           </div>
-          {hasError ? (
+          {needsReauth ? (
+            <span title={mcpInfo?.error}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-amber-500/20 text-amber-400 shrink-0"
+              style={{ backgroundColor: 'color-mix(in srgb, #f59e0b 8%, transparent)' }}>
+              <RefreshCw className="h-2.5 w-2.5" />Reconnexion requise
+            </span>
+          ) : hasError ? (
             <span title={mcpInfo?.error}
               className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-red-500/20 text-red-400 shrink-0"
               style={{ backgroundColor: 'color-mix(in srgb, #ef4444 8%, transparent)' }}>
@@ -252,9 +260,27 @@ function AppCard({
             <ShoppingBag className="h-3 w-3" />
             {isConnected ? 'Gérer depuis Boutiques' : 'Connecter depuis Boutiques'}
           </Link>
+        ) : app.unavailable ? (
+          <div className="space-y-1.5">
+            <button disabled
+              className="w-full py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs font-mono text-[var(--armada-text)]/30 cursor-not-allowed">
+              Indisponible
+            </button>
+            {app.note && (
+              <p className="text-[10px] text-[var(--armada-text)]/35 leading-relaxed">{app.note}</p>
+            )}
+          </div>
         ) : isConnected ? (
           <div className="flex gap-2">
-            <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">Actif</span>
+            {needsReauth ? (
+              <button onClick={() => onConnect(app)}
+                className="flex-1 py-2 rounded-full text-xs font-medium text-white hover:opacity-90 transition-all"
+                style={{ backgroundColor: 'var(--armada-primary)' }}>
+                Reconnecter
+              </button>
+            ) : (
+              <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">Actif</span>
+            )}
             <button onClick={() => onDisconnect(app)}
               className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors">
               Déconnecter
@@ -264,7 +290,8 @@ function AppCard({
           <button onClick={() => onConnect(app)}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium text-white hover:opacity-90 transition-all"
             style={{ backgroundColor: 'var(--armada-primary)' }}>
-            <Plug className="h-3 w-3" />Connecter
+            <Plug className="h-3 w-3" />
+            {oneClick ? `Se connecter avec ${app.category === 'google' ? 'Google' : app.name}` : 'Connecter'}
           </button>
         )}
       </div>
@@ -280,6 +307,15 @@ export default function IntegrationsPage() {
   const [search, setSearch] = useState('');
   const [modalApp, setModalApp] = useState<CatalogApp | null>(null);
   const [showCustomForm, setShowCustomForm] = useState(false);
+  const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  // Une app en un clic quitte la page pour l'écran de consentement, puis
+  // revient ici : c'est au retour qu'on demande au gateway de monter le serveur.
+  const startConnect = (app: CatalogApp) => {
+    const url = connectUrlFor(app);
+    if (url) window.location.href = url;
+    else setModalApp(app);
+  };
 
   const { data, mutate } = useSWR(
     activeStoreId ? `/api/integrations?storeId=${activeStoreId}` : '/api/integrations',
@@ -298,6 +334,40 @@ export default function IntegrationsPage() {
     await mutateStatus(data, { revalidate: false });
     return (data.servers || []) as { slug: string; status: string; error?: string }[];
   };
+
+  // Retour d'un flow OAuth : le gateway doit monter (ou retirer) le serveur avant
+  // que les agents y aient accès. On nettoie ensuite l'URL pour éviter un rejeu.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('mcp') ?? params.get('gsc');
+    if (!outcome) return;
+
+    const slug = params.get('slug') ?? 'Google Search Console';
+    window.history.replaceState({}, '', '/integrations');
+
+    if (outcome === 'connected') {
+      (async () => {
+        await mutate();
+        try {
+          const servers = await syncGateway();
+          const status = servers.find(s => s.slug === slug);
+          if (status && status.status !== 'connected') {
+            setBanner({ kind: 'err', text: status.error || `${slug} : le gateway n'a pas pu monter ce serveur.` });
+          } else {
+            setBanner({ kind: 'ok', text: `${slug} connecté.` });
+          }
+        } catch {
+          setBanner({ kind: 'err', text: 'Autorisation enregistrée, mais le gateway est injoignable.' });
+        }
+      })();
+    } else if (outcome === 'denied') {
+      setBanner({ kind: 'err', text: 'Autorisation refusée.' });
+    } else {
+      setBanner({ kind: 'err', text: `Échec de la connexion : ${params.get('reason') || 'erreur inconnue'}` });
+    }
+    // Ce flow ne doit se rejouer qu'au montage, jamais sur re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const integrations: any[] = (data?.integrations || []).filter((i: any) => i.isActive);
   const connectedPlatforms = new Set(integrations.map((i: any) => i.platform));
@@ -405,6 +475,23 @@ export default function IntegrationsPage() {
       </div>
 
       <div className="p-4 md:p-6 space-y-8">
+        {banner && (
+          <div className={cn(
+            'flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs',
+            banner.kind === 'ok'
+              ? 'border-green-500/25 text-green-400'
+              : 'border-red-500/25 text-red-400'
+          )}>
+            <span className="flex items-center gap-2">
+              {banner.kind === 'ok' ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+              {banner.text}
+            </span>
+            <button onClick={() => setBanner(null)} className="opacity-50 hover:opacity-100">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* ── Catalog grid ── */}
         {filtered.length === 0 ? (
           <div className="text-center py-16">
@@ -416,7 +503,7 @@ export default function IntegrationsPage() {
               <AppCard key={app.slug} app={app}
                 isConnected={isAppConnected(app)}
                 mcpInfo={mcpStatus[app.slug]}
-                onConnect={setModalApp}
+                onConnect={startConnect}
                 onDisconnect={handleDisconnect}
               />
             ))}

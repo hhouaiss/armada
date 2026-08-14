@@ -5,6 +5,12 @@ import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { prisma } from './database.js';
 import { decrypt } from './encryption.js';
+import {
+  IntegrationOAuthProvider,
+  ReauthRequiredError,
+  type McpOAuthState,
+} from './mcp-oauth.js';
+import { writeAuthorizedUserAdc, type GoogleOAuthCredentials } from './google-adc.js';
 
 /**
  * MCP Bridge — connects external MCP servers and exposes their tools as
@@ -21,6 +27,10 @@ import { decrypt } from './encryption.js';
  *   "allowedTools": ["get_*", "send_campaign"], // optional allowlist ("*" wildcard suffix)
  *   "requireApproval": ["*"]              // optional override; default: everything
  *                                         // not annotated read-only requires approval
+ *   "oauth": { … },                       // OAuth 2.1 state for a remote server,
+ *                                         // written by web/app/api/mcp/oauth/*
+ *   "googleOAuth": { refresh_token, … }   // Google credentials for a stdio server,
+ *                                         // exposed to it as ADC (see google-adc.ts)
  * }
  */
 
@@ -33,6 +43,10 @@ interface McpServerConfig {
   category?: string;
   allowedTools?: string[];
   requireApproval?: string[];
+  /** Remote server authenticated with OAuth 2.1 (DCR + PKCE done in the web app). */
+  oauth?: McpOAuthState;
+  /** Stdio Google server: credentials handed over as an ADC authorized_user file. */
+  googleOAuth?: GoogleOAuthCredentials;
 }
 
 interface McpServerState {
@@ -40,6 +54,8 @@ interface McpServerState {
   config: McpServerConfig;
   /** raw decrypted config JSON — used to detect config changes on sync */
   configJson: string;
+  /** Integration row id — token refreshes write back to this exact row. */
+  integrationId: string;
   client: Client;
   reconnecting: Promise<void> | null;
   /** registry names of the tools this server registered */
@@ -48,7 +64,8 @@ interface McpServerState {
 
 export interface McpServerStatus {
   slug: string;
-  status: 'connected' | 'error';
+  /** `reauth_required` = credentials expired; the user must reconnect the app. */
+  status: 'connected' | 'error' | 'reauth_required';
   toolCount: number;
   error?: string;
 }
@@ -56,6 +73,17 @@ export interface McpServerStatus {
 const servers = new Map<string, McpServerState>();
 /** Last error per slug for servers that failed to connect (not in `servers`). */
 const serverErrors = new Map<string, string>();
+/** Servers whose OAuth grant is dead — the user must reconnect from the UI. */
+const reauthNeeded = new Map<string, string>();
+
+/** An expired/revoked grant, as opposed to a genuine misconfiguration. */
+function isReauthError(err: any): boolean {
+  const name = err?.name ?? '';
+  const msg = err?.message ?? String(err ?? '');
+  return name === 'UnauthorizedError'
+    || name === 'ReauthRequiredError'
+    || /\b401\b|unauthorized|invalid_grant|invalid_token/i.test(msg);
+}
 
 let registryRef: ToolRegistry | null = null;
 /** Native (non-MCP) tools gated by an Integration platform, e.g. notion → notionTools. */
@@ -71,7 +99,7 @@ async function reconnectServer(state: McpServerState): Promise<void> {
       console.warn(`  ⚠️ MCP ${state.slug}: connection lost — reconnecting...`);
       try {
         await state.client.close().catch(() => {});
-        state.client = await connectServer(state.slug, state.config);
+        state.client = await connectServer(state.slug, state.config, state.integrationId);
         console.log(`  ✓ MCP ${state.slug}: reconnected`);
       } finally {
         state.reconnecting = null;
@@ -146,6 +174,15 @@ function wrapMcpTool(
         return await call();
       } catch (err: any) {
         const msg = err?.message ?? String(err);
+        // A dead grant can only be fixed by the user — surface it as such rather
+        // than retrying, and flag the server so the Apps page shows "Reconnecter".
+        if (isReauthError(err)) {
+          reauthNeeded.set(serverSlug, msg);
+          return {
+            success: false,
+            error: `MCP ${serverSlug}: autorisation expirée — reconnectez cette app depuis la page Apps.`,
+          };
+        }
         // Connection-level failure → reconnect once and retry the call
         if (CONNECTION_ERROR_RE.test(msg)) {
           try {
@@ -167,19 +204,40 @@ function wrapMcpTool(
   };
 }
 
-async function connectServer(slug: string, config: McpServerConfig): Promise<Client> {
+async function connectServer(
+  slug: string,
+  config: McpServerConfig,
+  integrationId: string
+): Promise<Client> {
   const client = new Client({ name: 'armada-gateway', version: '1.0.0' });
 
   if (config.url) {
+    // OAuth servers: the SDK transport reads the stored token, refreshes it when
+    // expired and hands the new set back through saveTokens(). Static-header
+    // servers (API key in Authorization) keep working unchanged.
+    const authProvider = config.oauth
+      ? new IntegrationOAuthProvider(slug, integrationId, config.oauth)
+      : undefined;
+
     const transport = new StreamableHTTPClientTransport(new URL(config.url), {
+      authProvider,
       requestInit: config.headers ? { headers: config.headers } : undefined,
     });
     await client.connect(transport);
   } else if (config.command) {
+    // Google stdio servers read credentials from a file, never from a token in
+    // the environment — write ADC and point them at it.
+    const env: Record<string, string> = { ...(config.env ?? {}) };
+    if (config.googleOAuth) {
+      env.GOOGLE_APPLICATION_CREDENTIALS = writeAuthorizedUserAdc(slug, config.googleOAuth);
+    }
+
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args ?? [],
-      env: config.env ? { ...process.env as Record<string, string>, ...config.env } : undefined,
+      env: Object.keys(env).length
+        ? { ...process.env as Record<string, string>, ...env }
+        : undefined,
     });
     try {
       await client.connect(transport);
@@ -209,10 +267,16 @@ async function teardownServer(state: McpServerState): Promise<void> {
 }
 
 /** Connect one server and register its tools. Throws on failure. */
-async function setupServer(slug: string, configJson: string): Promise<McpServerState> {
+async function setupServer(
+  slug: string,
+  configJson: string,
+  integrationId: string
+): Promise<McpServerState> {
   const config: McpServerConfig = JSON.parse(configJson);
-  const client = await connectServer(slug, config);
-  const state: McpServerState = { slug, config, configJson, client, reconnecting: null, toolNames: [] };
+  const client = await connectServer(slug, config, integrationId);
+  const state: McpServerState = {
+    slug, config, configJson, integrationId, client, reconnecting: null, toolNames: [],
+  };
 
   const { tools } = await client.listTools();
   const selected = config.allowedTools
@@ -266,20 +330,21 @@ export async function syncIntegrations(): Promise<McpServerStatus[]> {
 
   const activeIntegrations = await prisma.integration.findMany({
     where: { isActive: true },
-    select: { platform: true, credentials: true },
+    select: { id: true, platform: true, credentials: true },
   });
 
   const activePlatforms = new Set(activeIntegrations.map((i) => i.platform));
   await syncNativeTools(activePlatforms);
 
-  const wanted = new Map<string, string>(); // slug → decrypted config JSON
+  // slug → decrypted config JSON + the row it came from
+  const wanted = new Map<string, { configJson: string; integrationId: string }>();
   for (const integration of activeIntegrations) {
     if (!integration.platform.startsWith('mcp:')) continue;
     const slug = integration.platform.slice('mcp:'.length).replace(/[^a-zA-Z0-9_-]/g, '_');
     try {
       const encrypted = (integration.credentials as any)?.encrypted;
       if (!encrypted) throw new Error('missing encrypted credentials');
-      wanted.set(slug, decrypt(encrypted));
+      wanted.set(slug, { configJson: decrypt(encrypted), integrationId: integration.id });
     } catch (err: any) {
       serverErrors.set(slug, `credentials invalides: ${err?.message ?? err}`);
     }
@@ -288,27 +353,39 @@ export async function syncIntegrations(): Promise<McpServerStatus[]> {
   // Remove servers that are gone or whose config changed
   for (const state of Array.from(servers.values())) {
     const desired = wanted.get(state.slug);
-    if (desired === state.configJson) continue;
+    if (desired?.configJson === state.configJson) continue;
     console.log(`  − MCP ${state.slug}: ${desired ? 'config changed, reconnecting' : 'removed'}`);
     await teardownServer(state);
   }
 
   // Connect new/changed servers
-  for (const [slug, configJson] of wanted) {
-    if (servers.has(slug)) { serverErrors.delete(slug); continue; }
+  for (const [slug, { configJson, integrationId }] of wanted) {
+    if (servers.has(slug)) { serverErrors.delete(slug); reauthNeeded.delete(slug); continue; }
     try {
-      await setupServer(slug, configJson);
+      await setupServer(slug, configJson, integrationId);
       serverErrors.delete(slug);
+      reauthNeeded.delete(slug);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      serverErrors.set(slug, msg);
-      console.warn(`  ⚠️ MCP ${slug}: connection failed (${msg})`);
+      // Expired OAuth grant is not a config error — the user just has to reconnect.
+      if (err instanceof ReauthRequiredError || isReauthError(err)) {
+        reauthNeeded.set(slug, msg);
+        serverErrors.delete(slug);
+        console.warn(`  🔑 MCP ${slug}: reauthorization required`);
+      } else {
+        serverErrors.set(slug, msg);
+        reauthNeeded.delete(slug);
+        console.warn(`  ⚠️ MCP ${slug}: connection failed (${msg})`);
+      }
     }
   }
 
   // Drop stale errors for servers no longer wanted
   for (const slug of Array.from(serverErrors.keys())) {
     if (!wanted.has(slug)) serverErrors.delete(slug);
+  }
+  for (const slug of Array.from(reauthNeeded.keys())) {
+    if (!wanted.has(slug)) reauthNeeded.delete(slug);
   }
 
   return getMcpStatus();
@@ -322,6 +399,9 @@ export function getMcpStatus(): McpServerStatus[] {
   }
   for (const [slug, error] of serverErrors) {
     statuses.push({ slug, status: 'error', toolCount: 0, error });
+  }
+  for (const [slug, error] of reauthNeeded) {
+    statuses.push({ slug, status: 'reauth_required', toolCount: 0, error });
   }
   return statuses;
 }
