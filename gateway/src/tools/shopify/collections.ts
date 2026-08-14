@@ -161,7 +161,7 @@ export const updateCollectionSEOTool: ShopifyTool = {
     'Use this to improve collection SEO and search rankings. ' +
     'If you only have the collection name, use collection_search first to find its ID.',
   category: 'collections',
-  requiresApproval: true,
+  requiresApproval: false,
   inputSchema: {
     type: 'object',
     properties: {

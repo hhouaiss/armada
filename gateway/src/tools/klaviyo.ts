@@ -81,9 +81,9 @@ export const callKlaviyoApiTool: AgentTool = {
 
 export const callKlaviyoApiWriteTool: AgentTool = {
   name: 'call_klaviyo_api_write',
-  description: 'Execute a write operation on the Klaviyo API (POST/PATCH/DELETE): create or update campaigns, flows, lists, segments, profiles, templates, send campaigns, etc. Requires user approval — call it directly with final parameters; the approval flow handles the rest. Consult the Klaviyo API reference at https://developers.klaviyo.com/en/reference.',
+  description: 'Execute a write operation on the Klaviyo API (POST/PATCH/DELETE): create or update campaigns, flows, lists, segments, profiles, templates, send campaigns, etc. Consult the Klaviyo API reference at https://developers.klaviyo.com/en/reference.',
   category: 'marketing',
-  requiresApproval: true,
+  requiresApproval: false,
 
   inputSchema: {
     type: 'object',

@@ -4,6 +4,23 @@ import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 // freeze the whole agentic loop — and with it the chat and the approval executor.
 const TOOL_TIMEOUT_MS = 60_000;
 
+// Refunds are strictly off-limits for agents, with no approval escape hatch —
+// the merchant handles them directly in the Shopify dashboard.
+// Blocked here (single choke point) so it also covers MCP tools and raw
+// GraphQL/REST passthrough tools, matching both tool names and Shopify
+// refund mutation identifiers inside params.
+const REFUND_NAME_RE = /refund/i;
+const REFUND_PARAMS_RE = /\b(refundCreate|refundLineItems|suggestedRefund|returnRefund|refund\.json|orderEditAddCustomItem.*refund)\b/i;
+
+function isRefundOperation(toolName: string, params: any): boolean {
+  if (REFUND_NAME_RE.test(toolName)) return true;
+  try {
+    return REFUND_PARAMS_RE.test(JSON.stringify(params ?? {}));
+  } catch {
+    return true; // unserializable params on a write path — refuse rather than guess
+  }
+}
+
 export class ToolRegistry {
   private tools: Map<string, AgentTool> = new Map();
 
@@ -24,6 +41,16 @@ export class ToolRegistry {
     params: any,
     context: ToolContext
   ): Promise<ToolResult> {
+    if (isRefundOperation(toolName, params)) {
+      return {
+        success: false,
+        error:
+          'Opération interdite : les remboursements (refunds) ne peuvent JAMAIS être effectués par un agent, ' +
+          "même avec approbation. Le marchand les gère directement dans l'admin Shopify. " +
+          "N'essaie pas de contourner cette restriction — informe simplement l'utilisateur.",
+      };
+    }
+
     const tool = this.tools.get(toolName);
 
     if (!tool) {

@@ -280,6 +280,36 @@ export class ShopifyClient {
       { input }
     );
     throwUserErrors(data.productUpdate.userErrors);
+
+    // productUpdate's ProductInput cannot change variant prices — a price
+    // update must go through productVariantsBulkUpdate on each variant.
+    if (product.price != null) {
+      const variantIds: string[] = data.productUpdate.product.variants.edges.map(
+        (e: any) => e.node.id
+      );
+      if (variantIds.length > 0) {
+        const priceData = await this.query(
+          `mutation UpdateVariantPrices($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+              product {
+                id title bodyHtml vendor status
+                variants(first: 10) {
+                  edges { node { id title price inventoryQuantity inventoryItem { id } } }
+                }
+              }
+              userErrors { field message }
+            }
+          }`,
+          {
+            productId: toGid('Product', productId),
+            variants: variantIds.map((id) => ({ id, price: String(product.price) })),
+          }
+        );
+        throwUserErrors(priceData.productVariantsBulkUpdate.userErrors);
+        return { product: flattenProduct(priceData.productVariantsBulkUpdate.product) };
+      }
+    }
+
     return { product: flattenProduct(data.productUpdate.product) };
   }
 

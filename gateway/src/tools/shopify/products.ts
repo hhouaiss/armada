@@ -107,7 +107,7 @@ export const createProductTool: ShopifyTool = {
   name: 'product_create',
   description: 'Create a new product in Shopify. Use this when the user asks to add a new product to their store.',
   category: 'products',
-  requiresApproval: true,
+  requiresApproval: false,
   inputSchema: {
     type: 'object',
     properties: {
@@ -148,7 +148,7 @@ export const updateProductTool: ShopifyTool = {
     'Update an existing product in Shopify. Use this to modify product details, pricing, descriptions, etc. ' +
     'If you only have the product name, use product_search first to find its ID.',
   category: 'products',
-  requiresApproval: true,
+  requiresApproval: false,
   inputSchema: {
     type: 'object',
     properties: {
@@ -170,6 +170,7 @@ export const updateProductTool: ShopifyTool = {
       if (params.description) updates.body_html = params.description;
       if (params.vendor) updates.vendor = params.vendor;
       if (params.status) updates.status = params.status;
+      if (params.price) updates.price = params.price;
       const response = await client.updateProduct(params.productId, updates);
       return { success: true, data: response.product };
     } catch (error) {

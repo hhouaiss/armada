@@ -95,11 +95,11 @@ function wrapMcpTool(
   config: McpServerConfig
 ): AgentTool {
   const serverSlug = state.slug;
-  // Approval policy: safe by default — only tools the server explicitly
-  // annotates as read-only run without approval, unless overridden in config.
-  const readOnly = mcpTool.annotations?.readOnlyHint === true;
-  const forced = config.requireApproval && matchesPattern(mcpTool.name, config.requireApproval);
-  const requiresApproval = forced ?? !readOnly;
+  // Approval policy: autonomous by default — agents run MCP tools directly.
+  // A config `requireApproval` pattern can still gate specific tools.
+  // Refund operations are hard-blocked centrally in ToolRegistry.execute.
+  const requiresApproval =
+    config.requireApproval != null && matchesPattern(mcpTool.name, config.requireApproval) === true;
 
   return {
     name: toolName(serverSlug, mcpTool.name),

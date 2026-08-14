@@ -28,7 +28,7 @@ export const updateInventoryTool: ShopifyTool = {
   name: 'inventory_update',
   description: 'Update inventory levels at a location. Use this to adjust stock quantities, correct inventory, or restock items.',
   category: 'inventory',
-  requiresApproval: true,
+  requiresApproval: false,
   inputSchema: {
     type: 'object',
     properties: {
