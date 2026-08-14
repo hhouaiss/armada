@@ -88,7 +88,7 @@ function ConnectModal({
         ))}
 
         <p className="text-[10px] text-[var(--armada-text)]/30 font-mono">
-          Chiffré (AES-256) et stocké de façon sécurisée. Les outils apparaissent au prochain démarrage du gateway.
+          Chiffré (AES-256) et stocké de façon sécurisée. La connexion est testée immédiatement par le gateway.
         </p>
         {app.docsUrl && (
           <a href={app.docsUrl} target="_blank" rel="noreferrer"
@@ -192,13 +192,15 @@ function CustomMcpForm({ onDone }: { onDone: () => Promise<any> }) {
 // ── App card ──────────────────────────────────────────────────────────────────
 
 function AppCard({
-  app, isConnected, onConnect, onDisconnect,
+  app, isConnected, mcpInfo, onConnect, onDisconnect,
 }: {
   app: CatalogApp;
   isConnected: boolean;
+  mcpInfo?: { status: string; toolCount: number; error?: string };
   onConnect: (app: CatalogApp) => void;
   onDisconnect: (app: CatalogApp) => void;
 }) {
+  const hasError = isConnected && app.kind === 'mcp' && mcpInfo?.status === 'error';
   return (
     <div
       className={cn(
@@ -227,10 +229,17 @@ function AppCard({
               </div>
             </div>
           </div>
-          {isConnected && (
+          {hasError ? (
+            <span title={mcpInfo?.error}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-red-500/20 text-red-400 shrink-0"
+              style={{ backgroundColor: 'color-mix(in srgb, #ef4444 8%, transparent)' }}>
+              <AlertCircle className="h-2.5 w-2.5" />Erreur
+            </span>
+          ) : isConnected && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
               style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}>
-              <Check className="h-2.5 w-2.5" />Connecté
+              <Check className="h-2.5 w-2.5" />
+              {app.kind === 'mcp' && mcpInfo ? `${mcpInfo.toolCount} outils` : 'Connecté'}
             </span>
           )}
         </div>
@@ -276,6 +285,19 @@ export default function IntegrationsPage() {
     activeStoreId ? `/api/integrations?storeId=${activeStoreId}` : '/api/integrations',
     fetcher
   );
+  // Real MCP server state reported by the gateway (connected/error + tool count)
+  const { data: mcpStatusData, mutate: mutateStatus } = useSWR('/api/integrations/sync', fetcher);
+  const mcpStatus: Record<string, { status: string; toolCount: number; error?: string }> = {};
+  for (const s of mcpStatusData?.servers || []) mcpStatus[s.slug] = s;
+
+  // Ask the gateway to reconnect/disconnect MCP servers, return fresh statuses
+  const syncGateway = async () => {
+    const res = await fetch('/api/integrations/sync', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || 'Synchronisation gateway échouée');
+    await mutateStatus(data, { revalidate: false });
+    return (data.servers || []) as { slug: string; status: string; error?: string }[];
+  };
 
   const integrations: any[] = (data?.integrations || []).filter((i: any) => i.isActive);
   const connectedPlatforms = new Set(integrations.map((i: any) => i.platform));
@@ -309,16 +331,36 @@ export default function IntegrationsPage() {
     });
     if (!res.ok) throw new Error('Échec de la connexion');
     await mutate();
+
+    if (app.kind === 'mcp') {
+      // Real check: the gateway must actually connect the server. If it can't,
+      // roll back the row and surface the real error instead of a fake "Connecté".
+      const servers = await syncGateway();
+      const status = servers.find(s => s.slug === app.slug);
+      if (!status || status.status !== 'connected') {
+        await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' });
+        await mutate();
+        throw new Error(status?.error || 'Le gateway n\'a pas pu se connecter à ce serveur MCP');
+      }
+    }
   };
 
-  const disconnectPlatform = async (platform: string) => {
-    await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' });
-    mutate();
+  const disconnectPlatform = async (platforms: string[]) => {
+    await Promise.all(platforms.map(p =>
+      fetch(`/api/integrations?platform=${encodeURIComponent(p)}`, { method: 'DELETE' })
+    ));
+    await mutate();
+    // Make the gateway drop the tools immediately — agents lose access now.
+    try { await syncGateway(); } catch { /* gateway offline: rows are gone, sync happens at next boot */ }
   };
 
   const handleDisconnect = (app: CatalogApp) => {
-    const platform = app.kind === 'mcp' ? `mcp:${app.slug}` : (app.nativePlatform || app.slug);
-    disconnectPlatform(platform);
+    // Delete both the MCP row and any legacy native row (e.g. `notion`) so
+    // integration-gated native tools are disabled too.
+    const platforms = app.kind === 'mcp'
+      ? [`mcp:${app.slug}`, app.slug]
+      : [app.nativePlatform || app.slug];
+    disconnectPlatform(platforms);
   };
 
   return (
@@ -368,6 +410,7 @@ export default function IntegrationsPage() {
             {filtered.map(app => (
               <AppCard key={app.slug} app={app}
                 isConnected={isAppConnected(app)}
+                mcpInfo={mcpStatus[app.slug]}
                 onConnect={setModalApp}
                 onDisconnect={handleDisconnect}
               />
@@ -404,7 +447,7 @@ export default function IntegrationsPage() {
                   <Globe className="h-3.5 w-3.5 text-green-500" />
                   <span className="text-xs font-mono text-[var(--armada-text)]/80">{server.platform.slice(4)}</span>
                 </div>
-                <button onClick={() => disconnectPlatform(server.platform)}
+                <button onClick={() => disconnectPlatform([server.platform])}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-500/20 text-red-500 text-[10px] font-mono hover:bg-red-500/10 transition-colors">
                   <Unplug className="h-3 w-3" />Retirer
                 </button>
@@ -412,14 +455,15 @@ export default function IntegrationsPage() {
             ))}
             {showCustomForm && (
               <div className={cn('p-5', customServers.length > 0 && 'border-t border-[var(--armada-accent)]/50')}>
-                <CustomMcpForm onDone={async () => { await mutate(); setShowCustomForm(false); }} />
+                <CustomMcpForm onDone={async () => { await mutate(); await syncGateway(); setShowCustomForm(false); }} />
               </div>
             )}
           </div>
 
           <p className="text-[10px] font-mono text-[var(--armada-text)]/40 leading-relaxed">
             Par défaut, seuls les outils annotés lecture seule s&apos;exécutent sans approbation — le reste passe
-            par le flux d&apos;approbation (Mission Control / Telegram). Redémarrez le gateway après un ajout.
+            par le flux d&apos;approbation (Mission Control / Telegram). La connexion est appliquée
+            immédiatement — le badge indique le nombre d&apos;outils réellement exposés aux agents.
           </p>
         </section>
       </div>

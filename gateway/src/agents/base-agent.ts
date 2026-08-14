@@ -475,13 +475,17 @@ export class BaseAgent {
    * Default tool categories per agent type (OpenClaw tool profile pattern).
    * Agents only see tools relevant to their specialty.
    */
+  // 'mcp' (and the connector categories below) cover user-connected apps —
+  // MCP servers register their tools under the category set in the connector
+  // config (default 'mcp'), and they must be visible to agents.
   private static readonly DEFAULT_CATEGORY_SCOPE: Record<string, string[]> = {
-    product:   ['products', 'collections', 'inventory', 'orders', 'store', 'memory'],
-    inventory: ['inventory', 'products', 'store', 'memory'],
-    support:   ['customers', 'orders', 'products', 'store', 'memory'],
-    content:   ['content', 'products', 'collections', 'store', 'memory'],
-    seo:       ['seo', 'content', 'store', 'memory'],
-    major:     ['products', 'collections', 'inventory', 'orders', 'customers', 'content', 'store', 'memory'],
+    product:   ['products', 'collections', 'inventory', 'orders', 'store', 'memory', 'mcp'],
+    inventory: ['inventory', 'products', 'store', 'memory', 'mcp'],
+    support:   ['customers', 'orders', 'products', 'store', 'memory', 'mcp'],
+    content:   ['content', 'products', 'collections', 'store', 'memory', 'notion', 'productivity', 'mcp'],
+    seo:       ['seo', 'content', 'store', 'memory', 'analytics', 'mcp'],
+    major:     ['products', 'collections', 'inventory', 'orders', 'customers', 'content', 'store', 'memory',
+                'marketing', 'seo', 'analytics', 'finance', 'productivity', 'notion', 'mcp'],
   };
 
   /**

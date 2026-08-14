@@ -70,7 +70,7 @@ import {
   setApprovalActionNotifier,
   setApprovalResultNotifier,
 } from './lib/approval-flow.js';
-import { connectMcpServers } from './lib/mcp-bridge.js';
+import { initIntegrationSync } from './lib/mcp-bridge.js';
 
 // Load environment variables
 config();
@@ -135,15 +135,6 @@ async function bootstrap() {
   // Register store info tool
   toolRegistry.register(getStoreInfoTool);
 
-  // Register Google Search Console (SEO) tools
-  for (const tool of googleSearchConsoleTools) {
-    toolRegistry.register(tool);
-  }
-
-  // Register Klaviyo (marketing) tool
-  toolRegistry.register(callKlaviyoApiTool);
-  toolRegistry.register(callKlaviyoApiWriteTool);
-
   // Register orchestration tools (used by The Major)
   toolRegistry.register(dispatchToSpecialistTool);
   toolRegistry.register(parallelDispatchTool);
@@ -154,11 +145,6 @@ async function bootstrap() {
   toolRegistry.register(memoryWriteTool);
   toolRegistry.register(inboxCompleteTool);
 
-  // Register Notion tools
-  for (const tool of notionTools) {
-    toolRegistry.register(tool);
-  }
-
   // Web browsing (agents can read any URL)
   toolRegistry.register(webBrowseTool);
 
@@ -168,8 +154,14 @@ async function bootstrap() {
   // Human-in-the-loop approval gate
   toolRegistry.register(requestApprovalTool);
 
-  // External MCP servers (Integration rows with platform "mcp:<slug>")
-  await connectMcpServers(toolRegistry);
+  // Integration-gated tools: MCP servers (platform "mcp:<slug>") + native tools
+  // that only exist while their integration is active. Re-synced at runtime via
+  // POST /api/mcp/sync when the user connects/disconnects an app in the web UI.
+  await initIntegrationSync(toolRegistry, {
+    notion: notionTools,
+    klaviyo: [callKlaviyoApiTool, callKlaviyoApiWriteTool],
+    'google-search-console': googleSearchConsoleTools,
+  });
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 

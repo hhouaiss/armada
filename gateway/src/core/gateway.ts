@@ -375,6 +375,30 @@ export class Gateway {
       return;
     }
 
+    // MCP servers: current status (connected / errored, tool counts)
+    if (method === 'GET' && url === '/api/mcp/status') {
+      const { getMcpStatus } = await import('../lib/mcp-bridge.js');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ servers: getMcpStatus() }));
+      return;
+    }
+
+    // MCP servers: reconcile with the Integration table (called by the web UI
+    // after connecting/disconnecting an app — no gateway restart needed)
+    if (method === 'POST' && url === '/api/mcp/sync') {
+      try {
+        const { syncIntegrations } = await import('../lib/mcp-bridge.js');
+        const statuses = await syncIntegrations();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, servers: statuses }));
+      } catch (error) {
+        console.error('MCP sync failed:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'MCP sync failed' }));
+      }
+      return;
+    }
+
     // List all agents endpoint
     if (method === 'GET' && url === '/api/agents') {
       const agents = this.router.getAllAgents();

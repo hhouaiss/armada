@@ -38,11 +38,29 @@ interface McpServerConfig {
 interface McpServerState {
   slug: string;
   config: McpServerConfig;
+  /** raw decrypted config JSON — used to detect config changes on sync */
+  configJson: string;
   client: Client;
   reconnecting: Promise<void> | null;
+  /** registry names of the tools this server registered */
+  toolNames: string[];
 }
 
-const servers: McpServerState[] = [];
+export interface McpServerStatus {
+  slug: string;
+  status: 'connected' | 'error';
+  toolCount: number;
+  error?: string;
+}
+
+const servers = new Map<string, McpServerState>();
+/** Last error per slug for servers that failed to connect (not in `servers`). */
+const serverErrors = new Map<string, string>();
+
+let registryRef: ToolRegistry | null = null;
+/** Native (non-MCP) tools gated by an Integration platform, e.g. notion → notionTools. */
+let gatedNativeTools: Record<string, AgentTool[]> = {};
+const registeredNativePlatforms = new Set<string>();
 
 const CONNECTION_ERROR_RE = /closed|disconnect|not connected|ECONNREFUSED|ECONNRESET|EPIPE|fetch failed|terminated|socket hang up/i;
 
@@ -171,56 +189,147 @@ async function connectServer(slug: string, config: McpServerConfig): Promise<Cli
   return client;
 }
 
-/**
- * Connects all configured MCP servers and registers their tools.
- * A failing server logs a warning and is skipped — it never blocks boot.
- */
-export async function connectMcpServers(toolRegistry: ToolRegistry): Promise<void> {
-  const integrations = await prisma.integration.findMany({
-    where: { isActive: true, platform: { startsWith: 'mcp:' } },
-  });
+/** Tear down one server: unregister its tools and close the client. */
+async function teardownServer(state: McpServerState): Promise<void> {
+  for (const name of state.toolNames) registryRef?.unregister(name);
+  await state.client.close().catch(() => {});
+  servers.delete(state.slug);
+}
 
-  if (integrations.length === 0) return;
+/** Connect one server and register its tools. Throws on failure. */
+async function setupServer(slug: string, configJson: string): Promise<McpServerState> {
+  const config: McpServerConfig = JSON.parse(configJson);
+  const client = await connectServer(slug, config);
+  const state: McpServerState = { slug, config, configJson, client, reconnecting: null, toolNames: [] };
 
-  console.log(`🔌 Connecting ${integrations.length} MCP server(s)...`);
+  const { tools } = await client.listTools();
+  const selected = config.allowedTools
+    ? tools.filter((t) => matchesPattern(t.name, config.allowedTools!))
+    : tools;
 
-  for (const integration of integrations) {
-    const slug = integration.platform.slice('mcp:'.length).replace(/[^a-zA-Z0-9_-]/g, '_');
+  for (const mcpTool of selected) {
+    const wrapped = wrapMcpTool(state, mcpTool, config);
     try {
-      const encrypted = (integration.credentials as any)?.encrypted;
-      if (!encrypted) throw new Error('missing encrypted credentials');
-      const config: McpServerConfig = JSON.parse(decrypt(encrypted));
+      registryRef!.register(wrapped);
+      state.toolNames.push(wrapped.name);
+    } catch {
+      console.warn(`  ⚠️ MCP ${slug}: tool name collision, skipped ${wrapped.name}`);
+    }
+  }
+  servers.set(slug, state);
+  console.log(
+    `  ✓ MCP ${slug}: ${state.toolNames.length}/${tools.length} tools registered (category: ${config.category || 'mcp'})`
+  );
+  return state;
+}
 
-      const client = await connectServer(slug, config);
-      const state: McpServerState = { slug, config, client, reconnecting: null };
-      servers.push(state);
-
-      const { tools } = await client.listTools();
-      const selected = config.allowedTools
-        ? tools.filter((t) => matchesPattern(t.name, config.allowedTools!))
-        : tools;
-
-      let registered = 0;
-      for (const mcpTool of selected) {
-        const wrapped = wrapMcpTool(state, mcpTool, config);
-        try {
-          toolRegistry.register(wrapped);
-          registered++;
-        } catch {
-          console.warn(`  ⚠️ MCP ${slug}: tool name collision, skipped ${wrapped.name}`);
-        }
+/**
+ * Sync native integration-gated tools (Notion, Klaviyo, GSC…) with the DB:
+ * registered only while their Integration row is active.
+ */
+async function syncNativeTools(activePlatforms: Set<string>): Promise<void> {
+  for (const [platform, tools] of Object.entries(gatedNativeTools)) {
+    const active = activePlatforms.has(platform);
+    if (active && !registeredNativePlatforms.has(platform)) {
+      for (const tool of tools) {
+        try { registryRef!.register(tool); } catch { /* already registered */ }
       }
-      console.log(
-        `  ✓ MCP ${slug}: ${registered}/${tools.length} tools registered (category: ${config.category || 'mcp'})`
-      );
-    } catch (err: any) {
-      console.warn(`  ⚠️ MCP ${slug}: connection failed — skipped (${err?.message ?? err})`);
+      registeredNativePlatforms.add(platform);
+      console.log(`  ✓ Native tools enabled: ${platform} (${tools.length})`);
+    } else if (!active && registeredNativePlatforms.has(platform)) {
+      for (const tool of tools) registryRef!.unregister(tool.name);
+      registeredNativePlatforms.delete(platform);
+      console.log(`  − Native tools disabled: ${platform}`);
     }
   }
 }
 
+/**
+ * Reconcile MCP servers + gated native tools with the Integration table.
+ * Safe to call at any time (boot, or after connect/disconnect from the web UI).
+ * A failing server is reported in the returned status, never throws.
+ */
+export async function syncIntegrations(): Promise<McpServerStatus[]> {
+  if (!registryRef) throw new Error('initIntegrationSync() must be called first');
+
+  const activeIntegrations = await prisma.integration.findMany({
+    where: { isActive: true },
+    select: { platform: true, credentials: true },
+  });
+
+  const activePlatforms = new Set(activeIntegrations.map((i) => i.platform));
+  await syncNativeTools(activePlatforms);
+
+  const wanted = new Map<string, string>(); // slug → decrypted config JSON
+  for (const integration of activeIntegrations) {
+    if (!integration.platform.startsWith('mcp:')) continue;
+    const slug = integration.platform.slice('mcp:'.length).replace(/[^a-zA-Z0-9_-]/g, '_');
+    try {
+      const encrypted = (integration.credentials as any)?.encrypted;
+      if (!encrypted) throw new Error('missing encrypted credentials');
+      wanted.set(slug, decrypt(encrypted));
+    } catch (err: any) {
+      serverErrors.set(slug, `credentials invalides: ${err?.message ?? err}`);
+    }
+  }
+
+  // Remove servers that are gone or whose config changed
+  for (const state of Array.from(servers.values())) {
+    const desired = wanted.get(state.slug);
+    if (desired === state.configJson) continue;
+    console.log(`  − MCP ${state.slug}: ${desired ? 'config changed, reconnecting' : 'removed'}`);
+    await teardownServer(state);
+  }
+
+  // Connect new/changed servers
+  for (const [slug, configJson] of wanted) {
+    if (servers.has(slug)) { serverErrors.delete(slug); continue; }
+    try {
+      await setupServer(slug, configJson);
+      serverErrors.delete(slug);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      serverErrors.set(slug, msg);
+      console.warn(`  ⚠️ MCP ${slug}: connection failed (${msg})`);
+    }
+  }
+
+  // Drop stale errors for servers no longer wanted
+  for (const slug of Array.from(serverErrors.keys())) {
+    if (!wanted.has(slug)) serverErrors.delete(slug);
+  }
+
+  return getMcpStatus();
+}
+
+/** Current status of every configured MCP server (connected or errored). */
+export function getMcpStatus(): McpServerStatus[] {
+  const statuses: McpServerStatus[] = [];
+  for (const state of servers.values()) {
+    statuses.push({ slug: state.slug, status: 'connected', toolCount: state.toolNames.length });
+  }
+  for (const [slug, error] of serverErrors) {
+    statuses.push({ slug, status: 'error', toolCount: 0, error });
+  }
+  return statuses;
+}
+
+/**
+ * Boot-time entry point: remembers the registry + native gated tools,
+ * then runs a first sync. Never blocks boot on a failing server.
+ */
+export async function initIntegrationSync(
+  toolRegistry: ToolRegistry,
+  nativeTools: Record<string, AgentTool[]> = {}
+): Promise<void> {
+  registryRef = toolRegistry;
+  gatedNativeTools = nativeTools;
+  console.log('🔌 Syncing integrations (MCP servers + gated native tools)...');
+  await syncIntegrations();
+}
+
 /** Close all MCP connections (call on shutdown). */
 export async function disconnectMcpServers(): Promise<void> {
-  await Promise.allSettled(servers.map((s) => s.client.close()));
-  servers.length = 0;
+  await Promise.allSettled(Array.from(servers.values()).map((s) => s.client.close()));
+  servers.clear();
 }

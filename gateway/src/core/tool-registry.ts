@@ -32,6 +32,12 @@ export class ToolRegistry {
     console.log(`✓ Registered tool: ${tool.name} (${tool.category})`);
   }
 
+  unregister(name: string): boolean {
+    const existed = this.tools.delete(name);
+    if (existed) console.log(`− Unregistered tool: ${name}`);
+    return existed;
+  }
+
   get(name: string): AgentTool | undefined {
     return this.tools.get(name);
   }
