@@ -124,3 +124,41 @@ export class IntegrationOAuthProvider implements OAuthClientProvider {
     this.oauthState.tokens = undefined;
   }
 }
+
+/** OAuth provider for tenant-scoped AppConnection rows used by Connector v2. */
+export class AppConnectionOAuthProvider implements OAuthClientProvider {
+  private tokenState?: OAuthTokens;
+
+  constructor(
+    private readonly slug: string,
+    private readonly connectionId: string,
+    private readonly oauthState: McpOAuthState
+  ) {
+    this.tokenState = oauthState.tokens;
+  }
+
+  get redirectUrl(): string | undefined { return undefined; }
+  get clientMetadata(): OAuthClientMetadata { return CLIENT_METADATA; }
+  clientInformation(): OAuthClientInformationMixed { return this.oauthState.clientInformation; }
+  tokens(): OAuthTokens | undefined { return this.tokenState; }
+
+  async saveTokens(tokens: OAuthTokens): Promise<void> {
+    this.tokenState = tokens;
+    const row = await prisma.appConnection.findUnique({ where: { id: this.connectionId }, select: { credentials: true } });
+    const encrypted = (row?.credentials as any)?.encrypted;
+    if (!encrypted) return;
+    const config = JSON.parse(decrypt(encrypted));
+    config.oauth = { ...(config.oauth || this.oauthState), tokens };
+    await prisma.appConnection.update({
+      where: { id: this.connectionId },
+      data: { credentials: { encrypted: encrypt(JSON.stringify(config)) }, lastConnectedAt: new Date(), lastError: null },
+    });
+  }
+
+  redirectToAuthorization(): never { throw new ReauthRequiredError(this.slug); }
+  saveCodeVerifier(): void { throw new ReauthRequiredError(this.slug); }
+  codeVerifier(): never { throw new ReauthRequiredError(this.slug); }
+  async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): Promise<void> {
+    if (scope === 'tokens' || scope === 'all') this.tokenState = undefined;
+  }
+}

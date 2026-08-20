@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, Bot, Zap, AlertCircle, Check, Loader2, Shuffle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
+import { AgentAppTools } from '@/components/agent-app-tools';
 
 const PROVIDERS = {
   anthropic: {
@@ -618,6 +619,8 @@ export default function AgentSettingsPage() {
             <li>• You can change models anytime - changes take effect immediately</li>
           </ul>
         </div>
+
+        <AgentAppTools agentId={agentId} agentName={personality.name} />
 
         {/* Agent Skills */}
         <div className="border-t border-border pt-6 mt-6">

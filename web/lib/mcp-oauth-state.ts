@@ -24,6 +24,10 @@ export interface McpOAuthPending {
   category?: string;
   /** Prisma user id — the row is written for this user on callback. */
   userId: string;
+  storeId: string;
+  label: string;
+  stateId: string;
+  nonce: string;
   ts: number;
 }
 

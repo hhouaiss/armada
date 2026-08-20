@@ -24,6 +24,8 @@ export interface ToolContext {
   // Registry + session manager — injected so orchestration tools can create & register new agents
   toolRegistry?: import('../core/tool-registry.js').ToolRegistry;
   sessionManager?: import('../core/session-manager.js').SessionManager;
+  /** Set only by the approval executor after atomically claiming a request. */
+  approvalGranted?: boolean;
 }
 
 export interface ToolResult {
@@ -33,6 +35,14 @@ export interface ToolResult {
   message?: string;
   requiresApproval?: boolean;
   approvalDescription?: string;
+  /** Audit-only connector metadata. Never forwarded as MCP result content. */
+  audit?: {
+    connectionId: string;
+    connectorSlug: string;
+    accountLabel: string;
+    toolClassification: 'read' | 'write' | 'ambiguous' | 'blocked';
+    summary?: Record<string, any>;
+  };
 }
 
 export interface ToolInputSchema {
@@ -46,6 +56,11 @@ export interface AgentTool {
   description: string;
   category: string;
   requiresApproval?: boolean;
+  /** Contextual policy used by tenant-scoped MCP tools. */
+  getPolicy?(params: any, context: ToolContext): Promise<'blocked' | 'automatic' | 'approval'>;
+  getAuditMetadata?(params: any, context: ToolContext): Promise<ToolResult['audit'] | undefined>;
+  /** Return the schema/description visible to this exact store + agent. */
+  contextualize?(context: ToolContext): Promise<AgentTool | null>;
   inputSchema: ToolInputSchema;
   execute(params: any, context: ToolContext): Promise<ToolResult>;
   validate?(params: any): { valid: boolean; errors?: string[] };

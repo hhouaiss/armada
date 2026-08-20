@@ -19,83 +19,88 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  stores        Store[]
-  sessions      Session[]
-  integrations  Integration[]
-  llmApiKeys    LLMApiKey[]
-  skills        Skill[]
+  stores         Store[]
+  sessions       Session[]
+  integrations   Integration[]
+  appConnections AppConnection[]
+  llmApiKeys     LLMApiKey[]
+  skills         Skill[]
 
   @@map("users")
 }
 
 model Store {
-  id              String    @id @default(cuid())
-  shopifyDomain   String    @unique
-  shopifyStoreId  String?   @unique
-  storeName       String
-  accessToken     String    // Encrypted
-  scope           String
-  installedAt     DateTime  @default(now())
-  lastSyncAt      DateTime?
-  isActive        Boolean   @default(true)
+  id             String    @id @default(cuid())
+  shopifyDomain  String    @unique
+  shopifyStoreId String?   @unique
+  storeName      String
+  accessToken    String // Encrypted
+  scope          String
+  installedAt    DateTime  @default(now())
+  lastSyncAt     DateTime?
+  isActive       Boolean   @default(true)
 
-  userId          String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  agents                Agent[]
-  operations            Operation[]
-  chatMessages          ChatMessage[]
-  conversationSessions  ConversationSession[]
-  routingRules          RoutingRule[]
-  livrables             Livrable[]
-  agentMemory           AgentMemory[]
-  objectives            Objective[]
-  projects              Project[]
-  approvalRequests      ApprovalRequest[]
+  agents               Agent[]
+  operations           Operation[]
+  chatMessages         ChatMessage[]
+  conversationSessions ConversationSession[]
+  routingRules         RoutingRule[]
+  livrables            Livrable[]
+  agentMemory          AgentMemory[]
+  objectives           Objective[]
+  projects             Project[]
+  approvalRequests     ApprovalRequest[]
+  appConnections       AppConnection[]
+  connectorAuditEvents ConnectorAuditEvent[]
 
   @@index([userId])
   @@map("stores")
 }
 
 model Agent {
-  id              String   @id @default(cuid())
-  agentId         String   // e.g., "{storeId}:product-agent"
-  name            String
-  type            String   // 'product' | 'inventory' | 'support' | 'marketing'
+  id      String @id @default(cuid())
+  agentId String // e.g., "{storeId}:product-agent"
+  name    String
+  type    String // 'product' | 'inventory' | 'support' | 'marketing'
 
   // Legacy field (kept for backward compatibility)
-  personality     String   @db.Text
+  personality String @db.Text
 
   // OpenClaw-style customizable personality (Phase 2)
-  systemPrompt    String?  @db.Text  // Full system prompt with personality
-  capabilities    Json?                // Tool access config: { allowed: [], denied: [] }
-  customRules     String?  @db.Text  // Additional instructions/rules
+  systemPrompt String? @db.Text // Full system prompt with personality
+  capabilities Json? // Tool access config: { allowed: [], denied: [] }
+  customRules  String? @db.Text // Additional instructions/rules
 
   // Template system for white-label (Phase 2)
-  templateId      String?              // Reference to template: "shopify-product", "notion-assistant"
+  templateId String? // Reference to template: "shopify-product", "notion-assistant"
 
   // Multi-model support
-  modelProvider   String   @default("anthropic") // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together'
-  modelName       String   @default("claude-sonnet-4-5-20250929") // Model ID for the provider
+  modelProvider String @default("anthropic") // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together'
+  modelName     String @default("claude-sonnet-4-5-20250929") // Model ID for the provider
 
   // ClawXRouter — complexity-based auto routing
-  routingMode      String  @default("fixed")                    // 'fixed' | 'auto'
-  autoSimpleModel  String  @default("google/gemma-4-31b-it")   // OpenRouter model for simple queries
-  autoComplexModel String  @default("moonshotai/kimi-k2.5")    // OpenRouter model for complex queries
+  routingMode      String @default("fixed") // 'fixed' | 'auto'
+  autoSimpleModel  String @default("google/gemma-4-31b-it") // OpenRouter model for simple queries
+  autoComplexModel String @default("moonshotai/kimi-k2.5") // OpenRouter model for complex queries
 
-  isActive        Boolean  @default(true)
-  config          Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isActive  Boolean  @default(true)
+  config    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  storeId         String
-  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
-  operations              Operation[]
-  conversationSessions    ConversationSession[]
-  routingRules            RoutingRule[]
-  skills                  AgentSkill[]
-  livrables               Livrable[]
+  operations           Operation[]
+  conversationSessions ConversationSession[]
+  routingRules         RoutingRule[]
+  skills               AgentSkill[]
+  livrables            Livrable[]
+  connectionGrants     AgentConnectionGrant[]
+  toolPolicies         AgentToolPolicy[]
 
   @@unique([storeId, type])
   @@index([storeId])
@@ -104,26 +109,33 @@ model Agent {
 }
 
 model Operation {
-  id              String    @id @default(cuid())
-  operationId     String    @unique // WebSocket operation ID
-  action          String    // 'product_list', 'inventory_update', etc.
-  params          Json
-  result          Json?
-  status          String    // 'pending' | 'in_progress' | 'completed' | 'failed'
-  error           String?   @db.Text
-  startedAt       DateTime  @default(now())
-  completedAt     DateTime?
-  duration        Int?      // milliseconds
+  id                 String    @id @default(cuid())
+  operationId        String    @unique // WebSocket operation ID
+  action             String // 'product_list', 'inventory_update', etc.
+  params             Json
+  result             Json?
+  status             String // 'pending' | 'in_progress' | 'completed' | 'failed'
+  error              String?   @db.Text
+  startedAt          DateTime  @default(now())
+  completedAt        DateTime?
+  duration           Int? // milliseconds
+  connectionId       String?
+  connectorSlug      String?
+  accountLabel       String?
+  toolClassification String?
+  auditSummary       Json?
 
-  storeId         String
-  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
-  agentId         String?
-  agent           Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentId    String?
+  agent      Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  connection AppConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
   @@index([storeId, status])
   @@index([agentId])
   @@index([startedAt])
+  @@index([connectionId, startedAt])
   @@map("operations")
 }
 
@@ -138,34 +150,172 @@ model Session {
 }
 
 model Integration {
-  id              String   @id @default(cuid())
-  platform        String   // 'anthropic' | 'telegram' | 'whatsapp' | 'notion' | 'google_drive'
-  credentials     Json     // Encrypted credentials
-  isActive        Boolean  @default(true)
-  lastUsed        DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id          String    @id @default(cuid())
+  platform    String // 'anthropic' | 'telegram' | 'whatsapp' | 'notion' | 'google_drive'
+  credentials Json // Encrypted credentials
+  isActive    Boolean   @default(true)
+  lastUsed    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, platform])
   @@map("integrations")
 }
 
+// MCP v2 catalog entry. Registry metadata is cached here so execution never
+// depends on the preview public registry being available.
+model ConnectorDefinition {
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  name             String
+  description      String   @db.Text
+  publisher        String
+  source           String   @default("armada") // armada | registry | custom
+  registryName     String?
+  version          String?
+  digest           String?
+  transport        String   @default("streamable-http")
+  authMode         String   @default("oauth-mcp")
+  verificationTier String   @default("community")
+  category         String   @default("productivity")
+  logo             String?
+  endpoint         String?
+  packageConfig    Json?
+  scopes           Json     @default("[]")
+  toolMetadata     Json     @default("[]")
+  riskOverrides    Json     @default("{}")
+  isBeta           Boolean  @default(false)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  connections AppConnection[]
+
+  @@index([category, isActive])
+  @@map("connector_definitions")
+}
+
+// A named account connection belongs to one merchant and one Shopify store.
+model AppConnection {
+  id                    String    @id @default(cuid())
+  userId                String
+  storeId               String
+  connectorDefinitionId String
+  label                 String
+  accountEmail          String?
+  credentials           Json
+  grantedScopes         Json      @default("[]")
+  discoveredTools       Json      @default("[]")
+  status                String    @default("review_required")
+  isDefault             Boolean   @default(false)
+  lastConnectedAt       DateTime?
+  lastHealthAt          DateTime?
+  lastUsedAt            DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store       Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  connector   ConnectorDefinition    @relation(fields: [connectorDefinitionId], references: [id], onDelete: Restrict)
+  grants      AgentConnectionGrant[]
+  policies    AgentToolPolicy[]
+  operations  Operation[]
+  approvals   ApprovalRequest[]
+  auditEvents ConnectorAuditEvent[]
+
+  @@unique([storeId, connectorDefinitionId, label])
+  @@index([userId, storeId, status])
+  @@index([connectorDefinitionId, status])
+  @@map("app_connections")
+}
+
+model AgentConnectionGrant {
+  id           String   @id @default(cuid())
+  agentId      String
+  connectionId String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  agent      Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  connection AppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, connectionId])
+  @@index([connectionId])
+  @@map("agent_connection_grants")
+}
+
+model AgentToolPolicy {
+  id           String   @id @default(cuid())
+  agentId      String
+  connectionId String
+  toolName     String
+  mode         String   @default("approval") // blocked | automatic | approval
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  agent      Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  connection AppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, connectionId, toolName])
+  @@index([connectionId])
+  @@map("agent_tool_policies")
+}
+
+model ConnectorAuditEvent {
+  id           String   @id @default(cuid())
+  storeId      String
+  connectionId String?
+  agentId      String?
+  eventType    String
+  toolName     String?
+  status       String
+  summary      Json     @default("{}")
+  durationMs   Int?
+  createdAt    DateTime @default(now())
+
+  store      Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  connection AppConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([connectionId, createdAt])
+  @@map("connector_audit_events")
+}
+
+model ConnectorOAuthState {
+  id            String    @id @default(cuid())
+  nonceHash     String    @unique
+  userId        String
+  storeId       String
+  connectorSlug String
+  label         String
+  scopes        Json      @default("[]")
+  agentIds      Json      @default("[]")
+  redirectTo    String    @default("/integrations")
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([expiresAt, consumedAt])
+  @@map("connector_oauth_states")
+}
+
 model PlatformConfig {
-  id              String   @id @default(cuid())
-  name            String   @default("StoreTeam")
-  tagline         String?
-  logoUrl         String?
-  primaryColor    String   @default("#FF8C42")
-  accentColor     String?
-  domain          String?
-  features        Json     @default("{}")
-  agentTypes      Json     @default("[]")
-  toolCategories  Json     @default("[]")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String   @default("StoreTeam")
+  tagline        String?
+  logoUrl        String?
+  primaryColor   String   @default("#FF8C42")
+  accentColor    String?
+  domain         String?
+  features       Json     @default("{}")
+  agentTypes     Json     @default("[]")
+  toolCategories Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@map("platform_config")
 }
@@ -174,28 +324,28 @@ model ChatMessage {
   id        String   @id @default(cuid())
   storeId   String
   agentId   String
-  sender    String   // 'user' | 'agent'
+  sender    String // 'user' | 'agent'
   content   String   @db.Text
   metadata  Json?
   createdAt DateTime @default(now())
 
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, agentId, createdAt])
   @@map("chat_messages")
 }
 
 model ConversationSession {
-  id              String   @id @default(cuid())
-  conversationId  String   // "telegram:123456" | "websocket:user-abc" | "default"
-  agentId         String
-  storeId         String
-  history         Json     // Array of Anthropic MessageParam objects
-  lastMessageAt   DateTime @updatedAt
-  createdAt       DateTime @default(now())
+  id             String   @id @default(cuid())
+  conversationId String // "telegram:123456" | "websocket:user-abc" | "default"
+  agentId        String
+  storeId        String
+  history        Json // Array of Anthropic MessageParam objects
+  lastMessageAt  DateTime @updatedAt
+  createdAt      DateTime @default(now())
 
-  agent           Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, agentId])
   @@index([agentId, lastMessageAt])
@@ -204,40 +354,40 @@ model ConversationSession {
 }
 
 model AgentTemplate {
-  id              String   @id @default(cuid())
-  templateId      String   @unique  // "shopify-product", "shopify-inventory", "notion-assistant"
-  name            String
-  description     String   @db.Text
-  category        String   // "ecommerce", "crm", "knowledge", "support"
+  id          String @id @default(cuid())
+  templateId  String @unique // "shopify-product", "shopify-inventory", "notion-assistant"
+  name        String
+  description String @db.Text
+  category    String // "ecommerce", "crm", "knowledge", "support"
 
   // Template content (OpenClaw AGENTS.md / SOUL.md equivalent)
-  systemPrompt    String   @db.Text  // Base system prompt
-  personality     String   @db.Text  // Personality traits
-  defaultRules    String?  @db.Text  // Default rules/instructions
+  systemPrompt String  @db.Text // Base system prompt
+  personality  String  @db.Text // Personality traits
+  defaultRules String? @db.Text // Default rules/instructions
 
   // Tool configuration
-  capabilities    Json     // { allowed: ["product_*"], denied: ["product_delete"] }
+  capabilities Json // { allowed: ["product_*"], denied: ["product_delete"] }
 
   // Metadata
-  icon            String?  // Emoji or icon identifier
-  isPublic        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  icon      String? // Emoji or icon identifier
+  isPublic  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([category])
   @@map("agent_templates")
 }
 
 model LLMApiKey {
-  id          String   @id @default(cuid())
-  provider    String   // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together' | 'moonshot' | 'minimax'
-  apiKey      String   @db.Text // Encrypted API key
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  provider  String // 'anthropic' | 'openai' | 'gemini' | 'groq' | 'together' | 'moonshot' | 'minimax'
+  apiKey    String   @db.Text // Encrypted API key
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, provider])
   @@index([userId])
@@ -245,20 +395,20 @@ model LLMApiKey {
 }
 
 model RoutingRule {
-  id          String   @id @default(cuid())
-  storeId     String
-  agentId     String?  // If null, this is a fallback rule
-  priority    Int      @default(0)  // Higher = more specific, evaluated first
+  id       String  @id @default(cuid())
+  storeId  String
+  agentId  String? // If null, this is a fallback rule
+  priority Int     @default(0) // Higher = more specific, evaluated first
 
   // Matching conditions (OpenClaw binding pattern)
-  channel     String?  // "websocket" | "telegram" | "whatsapp" | null (any)
-  userId      String?  // Specific user ID
-  peerId      String?  // Telegram chat ID, phone number, etc.
+  channel String? // "websocket" | "telegram" | "whatsapp" | null (any)
+  userId  String? // Specific user ID
+  peerId  String? // Telegram chat ID, phone number, etc.
 
   // Context-aware matching (Phase 3 - Smart Routing)
-  keywords    Json?    // Array of keywords to match: ["product", "inventory"]
+  keywords      Json? // Array of keywords to match: ["product", "inventory"]
   intentPattern String? // Regex pattern for message content
-  actionType  String?  // "product_*" | "inventory_*" | "customer_*"
+  actionType    String? // "product_*" | "inventory_*" | "customer_*"
 
   // Metadata
   description String?  @db.Text
@@ -266,8 +416,8 @@ model RoutingRule {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  agent       Agent?   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  store Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  agent Agent? @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   @@index([storeId, priority])
   @@index([storeId, isActive])
@@ -276,29 +426,29 @@ model RoutingRule {
 
 // Agent Skills - Persistent knowledge and capabilities for agents
 model Skill {
-  id          String   @id @default(cuid())
-  name        String   // e.g., "supplier-email-templates", "brand-voice-guide"
-  description String   @db.Text // What this skill provides and when to use it
-  content     String   @db.Text // Markdown content with instructions, examples, templates
+  id          String @id @default(cuid())
+  name        String // e.g., "supplier-email-templates", "brand-voice-guide"
+  description String @db.Text // What this skill provides and when to use it
+  content     String @db.Text // Markdown content with instructions, examples, templates
 
   // Skill metadata
-  type        String   @default("knowledge") // 'knowledge' | 'template' | 'guideline' | 'example'
-  category    String?  // 'communication' | 'branding' | 'product' | 'inventory' | 'support'
-  icon        String?  // Emoji icon
+  type     String  @default("knowledge") // 'knowledge' | 'template' | 'guideline' | 'example'
+  category String? // 'communication' | 'branding' | 'product' | 'inventory' | 'support'
+  icon     String? // Emoji icon
 
   // Versioning and learning
-  version     Int      @default(1)
-  isActive    Boolean  @default(true)
+  version  Int     @default(1)
+  isActive Boolean @default(true)
 
   // Ownership
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Relations
-  agents      AgentSkill[]
+  agents AgentSkill[]
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([type])
@@ -309,7 +459,7 @@ model Skill {
 // Livrables — structured deliverables produced by agents
 model Livrable {
   id        String   @id @default(cuid())
-  slug      String   // Agent-generated slug e.g. "seo-avril-2026"
+  slug      String // Agent-generated slug e.g. "seo-avril-2026"
   title     String
   content   String   @db.Text // Full markdown content (agent response, marker stripped)
   agentName String
@@ -317,11 +467,11 @@ model Livrable {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  storeId   String
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
-  agentId   String?
-  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentId String?
+  agent   Agent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
   @@index([storeId, createdAt])
   @@map("livrables")
@@ -331,13 +481,13 @@ model Livrable {
 model AgentMemory {
   id        String   @id @default(cuid())
   storeId   String
-  type      String   // 'index' | 'topic'
-  key       String   // 'index' for main index, or topic key e.g. 'ventes/strategy'
+  type      String // 'index' | 'topic'
+  key       String // 'index' for main index, or topic key e.g. 'ventes/strategy'
   content   String   @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, type, key])
   @@index([storeId])
@@ -351,15 +501,15 @@ model Objective {
   title       String
   description String?   @db.Text
   type        String    @default("quarterly") // 'mission' | 'quarterly' | 'weekly' | 'onetime'
-  priority    Int       @default(2)           // 1=low, 2=medium, 3=high
-  status      String    @default("active")    // 'active' | 'completed' | 'archived' | 'blocked'
+  priority    Int       @default(2) // 1=low, 2=medium, 3=high
+  status      String    @default("active") // 'active' | 'completed' | 'archived' | 'blocked'
   dueDate     DateTime?
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  projects    Project[]
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  projects Project[]
 
   @@index([storeId])
   @@index([storeId, status])
@@ -368,18 +518,18 @@ model Objective {
 
 // Projects — sub-tasks dispatched from objectives to agents
 model Project {
-  id           String    @id @default(cuid())
+  id           String   @id @default(cuid())
   objectiveId  String
   storeId      String
   title        String
-  description  String?   @db.Text
-  ownerAgentId String?   // Agent responsible for this project
-  status       String    @default("active") // 'active' | 'completed' | 'blocked' | 'paused'
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  description  String?  @db.Text
+  ownerAgentId String? // Agent responsible for this project
+  status       String   @default("active") // 'active' | 'completed' | 'blocked' | 'paused'
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  objective    Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
-  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  objective Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([objectiveId])
   @@index([storeId])
@@ -388,42 +538,49 @@ model Project {
 
 // ApprovalRequest — human-in-the-loop gate for high-risk agent actions
 model ApprovalRequest {
-  id          String    @id @default(cuid())
-  storeId     String
-  agentId     String?
-  agentName   String?
-  action      String                         // Tool/action name requiring approval
-  description String    @db.Text             // Human-readable explanation with impact
-  payload     Json                           // Exact params to execute when approved
-  riskLevel   String    @default("medium")   // 'low' | 'medium' | 'high' | 'critical'
-  status      String    @default("pending")  // 'pending' | 'approved' | 'rejected' | 'expired'
-  decidedBy   String?
-  decidedAt   DateTime?
-  expiresAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id                 String    @id @default(cuid())
+  storeId            String
+  agentId            String?
+  agentName          String?
+  action             String // Tool/action name requiring approval
+  description        String    @db.Text // Human-readable explanation with impact
+  payload            Json // Exact params to execute when approved
+  riskLevel          String    @default("medium") // 'low' | 'medium' | 'high' | 'critical'
+  status             String    @default("pending") // 'pending' | 'approved' | 'rejected' | 'expired'
+  decidedBy          String?
+  decidedAt          DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime  @default(now())
+  connectionId       String?
+  connectorSlug      String?
+  accountLabel       String?
+  toolClassification String?
+  auditSummary       Json?
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store      Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  connection AppConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
   @@index([storeId, status])
   @@index([storeId, createdAt])
+  @@index([connectionId, createdAt])
   @@map("approval_requests")
 }
 
 // Many-to-many relation between Agents and Skills
 model AgentSkill {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  agentId   String
-  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentId String
+  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
-  skillId   String
-  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
 
   // Skill loading priority (higher priority skills loaded first)
-  priority  Int      @default(0)
+  priority Int @default(0)
 
   // Whether this skill is active for this agent
-  isActive  Boolean  @default(true)
+  isActive Boolean @default(true)
 
   assignedAt DateTime @default(now())
   updatedAt  DateTime @updatedAt

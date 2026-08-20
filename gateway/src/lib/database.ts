@@ -128,6 +128,11 @@ export async function updateOperation(
     result?: any;
     error?: string;
     duration?: number;
+    connectionId?: string;
+    connectorSlug?: string;
+    accountLabel?: string;
+    toolClassification?: string;
+    auditSummary?: any;
   }
 ) {
   return prisma.operation.updateMany({

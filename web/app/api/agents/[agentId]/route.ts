@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 
 // GET single agent
 export async function GET(
@@ -7,10 +8,12 @@ export async function GET(
   { params }: { params: Promise<{ agentId: string }> }
 ) {
   try {
+    const user = await getCurrentUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { agentId } = await params;
 
-    const agent = await prisma.agent.findUnique({
-      where: { id: agentId },
+    const agent = await prisma.agent.findFirst({
+      where: { id: agentId, store: { userId: user.id } },
       include: {
         store: true,
       },
@@ -33,6 +36,8 @@ export async function PATCH(
   { params }: { params: Promise<{ agentId: string }> }
 ) {
   try {
+    const user = await getCurrentUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { agentId } = await params;
     const body = await request.json();
     const { modelProvider, modelName, routingMode, autoSimpleModel, autoComplexModel } = body;
@@ -48,6 +53,8 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid routing mode' }, { status: 400 });
     }
 
+    const owned = await prisma.agent.findFirst({ where: { id: agentId, store: { userId: user.id } }, select: { id: true } });
+    if (!owned) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     // Update agent
     const agent = await prisma.agent.update({
       where: { id: agentId },

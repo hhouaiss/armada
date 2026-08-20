@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get('storeId');
     const status = searchParams.get('status') || 'pending';
@@ -10,6 +13,8 @@ export async function GET(request: NextRequest) {
     if (!storeId) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
+    const store = await prisma.store.findFirst({ where: { id: storeId, userId: user.id }, select: { id: true } });
+    if (!store) return NextResponse.json({ error: 'Store not found' }, { status: 404 });
 
     // Auto-expire approvals older than 24h
     await prisma.approvalRequest.updateMany({
@@ -30,7 +35,7 @@ export async function GET(request: NextRequest) {
       take: 50,
     });
 
-    return NextResponse.json({ approvals });
+    return NextResponse.json({ approvals: approvals.map(({ payload: _payload, ...approval }) => approval) });
   } catch (error) {
     console.error('Error fetching approvals:', error);
     return NextResponse.json({ error: 'Failed to fetch approvals' }, { status: 500 });
@@ -39,17 +44,19 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await request.json();
     const { id, decision } = body; // decision: 'approved' | 'rejected'
 
-    if (!id || !decision) {
-      return NextResponse.json({ error: 'id and decision are required' }, { status: 400 });
+    if (!id || !['approved', 'rejected'].includes(decision)) {
+      return NextResponse.json({ error: 'id and a valid decision are required' }, { status: 400 });
     }
 
     // Only pending requests can be decided — prevents re-running an
     // already-executed action if the endpoint is called twice.
     const updated = await prisma.approvalRequest.updateMany({
-      where: { id, status: 'pending' },
+      where: { id, status: 'pending', expiresAt: { gt: new Date() }, store: { userId: user.id } },
       data: {
         status: decision,
         decidedAt: new Date(),
@@ -64,8 +71,10 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const approval = await prisma.approvalRequest.findUnique({ where: { id } });
-    return NextResponse.json({ approval });
+    const approval = await prisma.approvalRequest.findFirst({ where: { id, store: { userId: user.id } } });
+    if (!approval) return NextResponse.json({ error: 'Approval not found' }, { status: 404 });
+    const { payload: _payload, ...safeApproval } = approval;
+    return NextResponse.json({ approval: safeApproval });
   } catch (error) {
     console.error('Error updating approval:', error);
     return NextResponse.json({ error: 'Failed to update approval' }, { status: 500 });

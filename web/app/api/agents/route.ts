@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get('storeId');
 
     const agents = await prisma.agent.findMany({
       where: {
         ...(storeId && { storeId }),
+        store: { userId: user.id },
         isActive: true,
       },
       include: {

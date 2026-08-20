@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { exchangeAuthorization } from '@modelcontextprotocol/sdk/client/auth.js';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/shopify';
-import { CATALOG } from '@/lib/mcp-catalog';
 import { MCP_OAUTH_COOKIE, verifyPending } from '@/lib/mcp-oauth-state';
+import crypto from 'node:crypto';
+import { syncConnectorGateway } from '@/lib/connector-gateway';
 
 /**
  * Step 2: exchange the authorization code and store the connection.
@@ -31,6 +32,16 @@ export async function GET(request: NextRequest) {
   if (oauthError) return back(`mcp=denied&slug=${pending.slug}`);
   if (!code) return back(`mcp=error&slug=${pending.slug}&reason=missing_code`);
 
+  const claimed = await prisma.connectorOAuthState.updateMany({
+    where: {
+      id: pending.stateId, userId: pending.userId, storeId: pending.storeId,
+      nonceHash: crypto.createHash('sha256').update(pending.nonce).digest('hex'),
+      consumedAt: null, expiresAt: { gt: new Date() },
+    },
+    data: { consumedAt: new Date() },
+  });
+  if (claimed.count !== 1) return back(`mcp=error&slug=${pending.slug}&reason=expired_or_replayed_state`);
+
   try {
     const tokens = await exchangeAuthorization(pending.authServerUrl, {
       clientInformation: pending.clientInformation,
@@ -40,11 +51,7 @@ export async function GET(request: NextRequest) {
       resource: pending.resource ? new URL(pending.resource) : undefined,
     });
 
-    const app = CATALOG.find((a) => a.slug === pending.slug);
     const config = {
-      url: pending.serverUrl,
-      category: pending.category ?? 'mcp',
-      ...(app?.mcp?.allowedTools ? { allowedTools: app.mcp.allowedTools } : {}),
       oauth: {
         authServerUrl: pending.authServerUrl,
         clientInformation: pending.clientInformation,
@@ -54,18 +61,28 @@ export async function GET(request: NextRequest) {
       },
     };
 
-    const platform = `mcp:${pending.slug}`;
     const credentials = { encrypted: encryptToken(JSON.stringify(config)) };
-
-    await prisma.integration.upsert({
-      where: { userId_platform: { userId: pending.userId, platform } },
-      create: { userId: pending.userId, platform, credentials, isActive: true },
-      update: { credentials, isActive: true, updatedAt: new Date() },
-    });
+    const definition = await prisma.connectorDefinition.findUnique({ where: { slug: pending.slug } });
+    const store = await prisma.store.findFirst({ where: { id: pending.storeId, userId: pending.userId } });
+    if (!definition || !store) return back(`mcp=error&slug=${pending.slug}&reason=ownership`);
+    let label = pending.label;
+    const duplicate = await prisma.appConnection.count({ where: { storeId: pending.storeId, connectorDefinitionId: definition.id, label } });
+    if (duplicate) label = `${label} ${duplicate + 1}`;
+    const connection = await prisma.appConnection.create({ data: {
+      userId: pending.userId, storeId: pending.storeId, connectorDefinitionId: definition.id,
+      label, credentials, grantedScopes: pending.scope?.split(' ') || [], status: 'active', lastConnectedAt: new Date(),
+    } });
+    const oauthState = await prisma.connectorOAuthState.findUnique({ where: { id: pending.stateId } });
+    const agentIds = Array.isArray(oauthState?.agentIds) ? oauthState.agentIds.map(String) : [];
+    if (agentIds.length) {
+      await prisma.agentConnectionGrant.createMany({ data: agentIds.map((agentId) => ({ agentId, connectionId: connection.id })), skipDuplicates: true });
+    }
+    await prisma.connectorAuditEvent.create({ data: { storeId: pending.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: pending.slug } } });
+    await syncConnectorGateway().catch(() => null);
 
     // `mcp=connected` makes the Apps page trigger a gateway sync on load, so the
     // tools reach the agents without waiting for a restart.
-    return back(`mcp=connected&slug=${pending.slug}`);
+    return back(`mcp=connected&slug=${pending.slug}&connectionId=${connection.id}`);
   } catch (err: any) {
     console.error('[MCP OAuth] callback failed:', pending.slug, err);
     return back(

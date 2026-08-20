@@ -43,6 +43,10 @@ interface ApprovalRequest {
   riskLevel: 'low' | 'medium' | 'high' | 'critical';
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
+  connectorSlug?: string;
+  accountLabel?: string;
+  toolClassification?: string;
+  auditSummary?: { argumentKeys?: string[]; redacted?: boolean };
 }
 
 interface Department {
@@ -1279,6 +1283,30 @@ function ApprovalCard({
       <p className="text-sm text-[var(--armada-text)]/60 leading-relaxed">
         {approval.description}
       </p>
+
+      {approval.connectorSlug && (
+        <div className="flex flex-wrap gap-2 text-xs text-[var(--armada-text)]/50">
+          <span className="rounded-full bg-[var(--armada-text)]/5 px-2.5 py-1">
+            App&nbsp;: {approval.connectorSlug}
+          </span>
+          {approval.accountLabel && (
+            <span className="rounded-full bg-[var(--armada-text)]/5 px-2.5 py-1">
+              Compte&nbsp;: {approval.accountLabel}
+            </span>
+          )}
+          {approval.toolClassification && (
+            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-400">
+              {approval.toolClassification === 'write' ? 'Modification' : approval.toolClassification}
+            </span>
+          )}
+        </div>
+      )}
+
+      {!!approval.auditSummary?.argumentKeys?.length && (
+        <p className="text-xs text-[var(--armada-text)]/35">
+          Paramètres masqués&nbsp;: {approval.auditSummary.argumentKeys.join(', ')}
+        </p>
+      )}
 
       <p className="text-xs text-[var(--armada-text)]/30">
         Après approbation, l&apos;action s&apos;exécute automatiquement — le résultat apparaît dans le chat de l&apos;agent.

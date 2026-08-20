@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "migrate:connectors-v2": "tsx scripts/migrate-connectors-v2.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

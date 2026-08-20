@@ -42,6 +42,17 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
+  async getPolicy(toolName: string, params: any, context: ToolContext): Promise<'blocked' | 'automatic' | 'approval'> {
+    const tool = this.tools.get(toolName);
+    if (!tool) return 'blocked';
+    if (tool.getPolicy) return tool.getPolicy(params, context);
+    return tool.requiresApproval ? 'approval' : 'automatic';
+  }
+
+  async getAuditMetadata(toolName: string, params: any, context: ToolContext): Promise<ToolResult['audit'] | undefined> {
+    return this.tools.get(toolName)?.getAuditMetadata?.(params, context);
+  }
+
   async execute(
     toolName: string,
     params: any,
@@ -63,6 +74,20 @@ export class ToolRegistry {
       return {
         success: false,
         error: `Tool ${toolName} not found`,
+      };
+    }
+
+
+    const policy = await this.getPolicy(toolName, params, context);
+    if (policy === 'blocked') {
+      return { success: false, error: `Tool ${toolName} is not available for this agent or store` };
+    }
+    if (policy === 'approval' && !context.approvalGranted) {
+      return {
+        success: false,
+        error: `Tool ${toolName} requires human approval`,
+        requiresApproval: true,
+        approvalDescription: tool.description,
       };
     }
 
@@ -112,5 +137,13 @@ export class ToolRegistry {
 
   listAll(): AgentTool[] {
     return Array.from(this.tools.values());
+  }
+
+  async listForContext(context: ToolContext): Promise<AgentTool[]> {
+    const visible = await Promise.all(Array.from(this.tools.values()).map(async (tool) => {
+      if (!tool.contextualize) return tool;
+      return tool.contextualize(context);
+    }));
+    return visible.filter((tool): tool is AgentTool => tool !== null);
   }
 }

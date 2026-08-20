@@ -45,6 +45,10 @@ Thumbs.db
 # ─── Prisma generated ──────────────────────────────────────────────────────────
 web/prisma/migrations/
 gateway/prisma/migrations/
+!web/prisma/migrations/
+web/prisma/migrations/*
+!web/prisma/migrations/20260820090000_mcp_connector_platform_v2/
+!web/prisma/migrations/20260820090000_mcp_connector_platform_v2/migration.sql
 
 # ─── Misc ──────────────────────────────────────────────────────────────────────
 *.local

@@ -377,6 +377,9 @@ export class Gateway {
 
     // MCP servers: current status (connected / errored, tool counts)
     if (method === 'GET' && url === '/api/mcp/status') {
+      if (process.env.CONNECTOR_RUNNER_TOKEN && req.headers.authorization !== `Bearer ${process.env.CONNECTOR_RUNNER_TOKEN}`) {
+        res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+      }
       const { getMcpStatus } = await import('../lib/mcp-bridge.js');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ servers: getMcpStatus() }));
@@ -386,6 +389,9 @@ export class Gateway {
     // MCP servers: reconcile with the Integration table (called by the web UI
     // after connecting/disconnecting an app — no gateway restart needed)
     if (method === 'POST' && url === '/api/mcp/sync') {
+      if (process.env.CONNECTOR_RUNNER_TOKEN && req.headers.authorization !== `Bearer ${process.env.CONNECTOR_RUNNER_TOKEN}`) {
+        res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+      }
       try {
         const { syncIntegrations } = await import('../lib/mcp-bridge.js');
         const statuses = await syncIntegrations();

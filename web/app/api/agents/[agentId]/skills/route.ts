@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
+
+async function ownsAgent(request: NextRequest, agentId: string) {
+  const user = await getCurrentUser(request);
+  if (!user) return null;
+  return prisma.agent.findFirst({ where: { id: agentId, store: { userId: user.id } }, select: { id: true, store: { select: { userId: true } } } });
+}
 
 // GET - List skills assigned to an agent
 export async function GET(
@@ -8,6 +15,7 @@ export async function GET(
 ) {
   try {
     const { agentId } = await params;
+    if (!(await ownsAgent(request, agentId))) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
 
     const agentSkills = await prisma.agentSkill.findMany({
       where: { agentId },
@@ -31,6 +39,8 @@ export async function POST(
 ) {
   try {
     const { agentId } = await params;
+    const owned = await ownsAgent(request, agentId);
+    if (!owned) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     const body = await request.json();
     const { skillId, priority } = body;
 
@@ -38,6 +48,8 @@ export async function POST(
       return NextResponse.json({ error: 'Skill ID is required' }, { status: 400 });
     }
 
+    const skill = await prisma.skill.findFirst({ where: { id: skillId, userId: owned.store.userId }, select: { id: true } });
+    if (!skill) return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
     // Check if already assigned
     const existing = await prisma.agentSkill.findUnique({
       where: {
@@ -92,6 +104,7 @@ export async function DELETE(
 ) {
   try {
     const { agentId } = await params;
+    if (!(await ownsAgent(request, agentId))) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     const { searchParams } = new URL(request.url);
     const skillId = searchParams.get('skillId');
 

@@ -6,8 +6,10 @@ import {
 } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientMetadata } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { getCurrentUser } from '@/lib/auth';
-import { CATALOG } from '@/lib/mcp-catalog';
+import { prisma } from '@/lib/prisma';
+import { ensureCuratedConnectors } from '@/lib/connector-catalog';
 import { MCP_OAUTH_COOKIE, signPending } from '@/lib/mcp-oauth-state';
+import crypto from 'node:crypto';
 
 /**
  * Step 1 of the "connect an app in one click" flow, for any remote MCP server
@@ -33,10 +35,13 @@ export async function GET(request: NextRequest) {
   }
 
   const slug = request.nextUrl.searchParams.get('slug');
+  const storeId = request.nextUrl.searchParams.get('storeId') || '';
   if (!slug) return back('mcp=error&reason=missing_slug');
-
-  const app = CATALOG.find((a) => a.slug === slug);
-  const serverUrl = app?.mcp?.url ?? request.nextUrl.searchParams.get('url') ?? undefined;
+  await ensureCuratedConnectors(prisma);
+  const store = await prisma.store.findFirst({ where: { id: storeId, userId: user.id }, select: { id: true } });
+  const definition = await prisma.connectorDefinition.findFirst({ where: { slug, isActive: true } });
+  if (!store || !definition) return back('mcp=error&reason=invalid_connector_or_store');
+  const serverUrl = definition.endpoint ?? request.nextUrl.searchParams.get('url') ?? undefined;
   if (!serverUrl) return back(`mcp=error&reason=unknown_server&slug=${slug}`);
 
   const redirectUri = `${origin}/api/mcp/oauth/callback`;
@@ -46,7 +51,7 @@ export async function GET(request: NextRequest) {
 
     // Scope selection: prefer what the resource advertises, else the catalog hint.
     const scope =
-      info.resourceMetadata?.scopes_supported?.join(' ') ?? app?.mcp?.scope ?? undefined;
+      info.resourceMetadata?.scopes_supported?.join(' ') ?? undefined;
 
     const clientMetadata: OAuthClientMetadata = {
       client_name: 'Armada',
@@ -74,6 +79,15 @@ export async function GET(request: NextRequest) {
       { metadata: info.authorizationServerMetadata, clientInformation, redirectUrl: redirectUri, scope, resource }
     );
 
+    const nonce = crypto.randomBytes(32).toString('base64url');
+    const requestedAgentIds = (request.nextUrl.searchParams.get('agentIds') || '').split(',').filter(Boolean);
+    const validAgents = await prisma.agent.findMany({ where: { id: { in: requestedAgentIds }, storeId }, select: { id: true } });
+    const oauthState = await prisma.connectorOAuthState.create({ data: {
+      nonceHash: crypto.createHash('sha256').update(nonce).digest('hex'), userId: user.id,
+      storeId, connectorSlug: slug, label: (request.nextUrl.searchParams.get('label') || definition.name).slice(0, 80),
+      scopes: scope ? scope.split(' ') : [], agentIds: validAgents.map((agent) => agent.id),
+      expiresAt: new Date(Date.now() + 15 * 60_000),
+    } });
     const response = NextResponse.redirect(authorizationUrl.toString());
     response.cookies.set(
       MCP_OAUTH_COOKIE,
@@ -86,8 +100,12 @@ export async function GET(request: NextRequest) {
         redirectUri,
         resource: resource.href,
         scope,
-        category: app?.mcp?.category,
+        category: definition.category,
         userId: user.id,
+        storeId,
+        label: oauthState.label,
+        stateId: oauthState.id,
+        nonce,
         ts: Date.now(),
       }),
       { httpOnly: true, secure: origin.startsWith('https'), sameSite: 'lax', path: '/', maxAge: 900 }

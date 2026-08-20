@@ -18,6 +18,8 @@ import { SessionManager } from '../core/session-manager.js';
 import { ToolResult } from '../types/operations.js';
 import { prisma, getStoreCredentials, saveChatMessage } from './database.js';
 import { decryptToken } from './shopify-client.js';
+import { encrypt, decrypt } from './encryption.js';
+import { safeArgumentSummary } from './connector-privacy.js';
 
 export interface ApprovalDeps {
   toolRegistry: ToolRegistry;
@@ -62,6 +64,7 @@ export async function createExecutableApproval(input: {
   params: Record<string, any>;
   conversationId: string;
   description?: string;
+  audit?: ToolResult['audit'];
 }) {
   const approval = await prisma.approvalRequest.create({
     data: {
@@ -73,10 +76,14 @@ export async function createExecutableApproval(input: {
         input.description ?? describeToolCall(input.toolName, input.params),
       payload: {
         __execute: true,
-        toolName: input.toolName,
-        params: input.params,
+        encryptedCall: encrypt(JSON.stringify({ toolName: input.toolName, params: input.params })),
         conversationId: input.conversationId,
       },
+      connectionId: input.audit?.connectionId,
+      auditSummary: input.audit?.summary ?? safeArgumentSummary(input.params),
+      connectorSlug: input.audit?.connectorSlug ?? (input.toolName.includes('__') ? input.toolName.split('__')[0] : null),
+      accountLabel: input.audit?.accountLabel ?? (typeof input.params._armada_account === 'string' ? input.params._armada_account : null),
+      toolClassification: input.audit?.toolClassification ?? (input.toolName.includes('__') ? 'ambiguous' : null),
       riskLevel: 'medium',
       status: 'pending',
       expiresAt: new Date(Date.now() + EXPIRY_MS),
@@ -130,10 +137,17 @@ export async function executeApproval(
     __execute?: boolean;
     toolName?: string;
     params?: Record<string, any>;
+    encryptedCall?: string;
     conversationId?: string;
   };
 
-  if (!payload?.__execute || !payload.toolName) {
+  const executable = payload?.toolName
+    ? { toolName: payload.toolName, params: payload.params ?? {} }
+    : payload?.encryptedCall
+      ? JSON.parse(decrypt(payload.encryptedCall)) as { toolName: string; params: Record<string, any> }
+      : null;
+
+  if (!payload?.__execute || !executable?.toolName) {
     // Informational approval (request_approval tool) — nothing to run
     await prisma.approvalRequest.update({
       where: { id: approvalId },
@@ -155,9 +169,10 @@ export async function executeApproval(
       router: deps.router,
       toolRegistry: deps.toolRegistry,
       sessionManager: deps.sessionManager,
+      approvalGranted: true,
     };
 
-    result = await deps.toolRegistry.execute(payload.toolName, payload.params ?? {}, context);
+    result = await deps.toolRegistry.execute(executable.toolName, executable.params ?? {}, context);
   } catch (error) {
     result = { success: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -170,7 +185,7 @@ export async function executeApproval(
     .catch(() => {});
 
   console.log(
-    `  ${result.success ? '✅' : '✗'} Approval ${approvalId} executed: ${payload.toolName} — ${
+    `  ${result.success ? '✅' : '✗'} Approval ${approvalId} executed: ${executable.toolName} — ${
       result.success ? 'ok' : result.error
     }`
   );

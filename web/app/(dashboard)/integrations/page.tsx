@@ -1,569 +1,189 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
 import {
-  Check, ExternalLink, Key, Loader2, Search, X, Plug,
-  Globe, ShoppingBag, Server, AlertCircle, Unplug, Plus, RefreshCw,
+  Activity, AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Check, CheckCircle2,
+  ChevronRight, CircleOff, ExternalLink, Filter, KeyRound, Loader2, Plus, RefreshCw,
+  Search, Server, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, Unplug, Users, X,
 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import { cn } from '@/lib/utils';
-import {
-  CATALOG, CATALOG_CATEGORIES, buildMcpCredentials, connectUrlFor, type CatalogApp,
-} from '@/lib/mcp-catalog';
 
-const fetcher = (url: string) => fetch(url).then(r => r.json());
+const fetcher = (url: string) => fetch(url).then(async (response) => {
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Erreur réseau');
+  return data;
+});
 
-const inputClass = 'w-full rounded-xl border border-[var(--armada-accent)]/60 px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 transition-colors';
-const inputStyle = { backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' } as const;
+type Connector = {
+  id: string; slug: string; name: string; description: string; publisher: string; category: string;
+  logo?: string; transport: string; authMode: string; verificationTier: string; scopes: string[];
+  capabilities: string[]; secretFields: Array<{ key: string; label: string; placeholder: string }>;
+  isBeta: boolean; connectionCount: number; docsUrl?: string;
+};
 
-// ── Connect modal (MCP + native) ──────────────────────────────────────────────
+type Agent = { id: string; name: string; type: string };
+type Tool = { name: string; description: string; readOnly: boolean; destructive: boolean };
+type Connection = {
+  id: string; label: string; accountEmail?: string; status: string; isDefault: boolean; lastHealthAt?: string;
+  lastError?: string; discoveredTools: Tool[]; connector: Connector;
+  grants: Array<{ agentId: string; agent: Agent }>;
+  policies: Array<{ agentId: string; toolName: string; mode: string }>;
+};
 
-function ConnectModal({
-  app, onClose, onSave,
-}: {
-  app: CatalogApp;
-  onClose: () => void;
-  onSave: (values: Record<string, string>) => Promise<void>;
-}) {
-  const fields = app.kind === 'mcp'
-    ? app.mcp!.secrets.map(s => ({ key: s.key, label: s.label, placeholder: s.placeholder }))
-    : (app.nativeFields || []);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+const TRUST: Record<string, { label: string; className: string }> = {
+  armada_verified: { label: 'Vérifié Armada', className: 'text-blue-500 bg-blue-500/10 border-blue-500/20' },
+  publisher_verified: { label: 'Éditeur vérifié', className: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' },
+  community: { label: 'Communauté', className: 'text-amber-500 bg-amber-500/10 border-amber-500/20' },
+  custom: { label: 'Personnalisé', className: 'text-violet-500 bg-violet-500/10 border-violet-500/20' },
+};
 
-  const allFilled = fields.every(f => (values[f.key] || '').trim());
+const STATUS: Record<string, { label: string; dot: string }> = {
+  active: { label: 'Opérationnel', dot: 'bg-emerald-500' },
+  error: { label: 'Erreur', dot: 'bg-red-500' },
+  reauth_required: { label: 'À reconnecter', dot: 'bg-amber-500' },
+  review_required: { label: 'À vérifier', dot: 'bg-amber-500' },
+  disabled: { label: 'Désactivé', dot: 'bg-zinc-400' },
+};
 
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(values);
-      onClose();
-    } catch (e: any) {
-      setError(e?.message || 'Échec de la connexion');
-    } finally {
-      setSaving(false);
-    }
-  };
+function TrustBadge({ tier }: { tier: string }) {
+  const trust = TRUST[tier] || TRUST.community;
+  return <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-mono', trust.className)}><BadgeCheck className="h-3 w-3" />{trust.label}</span>;
+}
 
+function ConnectorCard({ connector, onOpen }: { connector: Connector; onOpen: () => void }) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div
-        className="w-full max-w-sm rounded-2xl border border-[var(--armada-accent)]/60 p-6 space-y-4 shadow-2xl"
-        style={{ backgroundColor: 'var(--armada-surface)' }}
-      >
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="font-serif text-lg text-[var(--armada-text)]">Connecter {app.name}</h3>
-            <p className="text-xs text-[var(--armada-text)]/50 mt-0.5">
-              {app.kind === 'mcp' ? 'Connexion via MCP — vos agents auront accès à ses outils.' : 'Entrez vos identifiants.'}
-            </p>
-          </div>
-          <button onClick={onClose} className="text-[var(--armada-text)]/40 hover:text-[var(--armada-text)] transition-colors">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {fields.map(field => (
-          <div key={field.key} className="space-y-2">
-            <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--armada-text)]/50">
-              {field.label} <span className="text-[var(--armada-primary)]">*</span>
-            </label>
-            <div className="relative">
-              <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--armada-text)]/30" />
-              <input
-                type="password"
-                value={values[field.key] || ''}
-                onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
-                placeholder={field.placeholder}
-                className={cn(inputClass, 'pl-9')}
-                style={inputStyle}
-                autoComplete="off" data-lpignore="true" data-1p-ignore
-              />
-            </div>
-          </div>
-        ))}
-
-        <p className="text-[10px] text-[var(--armada-text)]/30 font-mono">
-          Chiffré (AES-256) et stocké de façon sécurisée. La connexion est testée immédiatement par le gateway.
-        </p>
-        {app.docsUrl && (
-          <a href={app.docsUrl} target="_blank" rel="noreferrer"
-            className="flex items-center gap-1 text-[10px] font-mono text-[var(--armada-text)]/40 hover:text-[var(--armada-text)]">
-            <ExternalLink className="h-3 w-3" />Documentation {app.name}
-          </a>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 text-xs text-red-500 font-mono">
-            <AlertCircle className="h-3.5 w-3.5" />{error}
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <button onClick={onClose}
-            className="flex-1 py-2.5 rounded-full border border-[var(--armada-accent)] text-sm text-[var(--armada-text)]/60 hover:text-[var(--armada-text)] transition-colors">
-            Annuler
-          </button>
-          <button onClick={handleSave} disabled={!allFilled || saving}
-            className="flex-1 py-2.5 rounded-full text-white text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40"
-            style={{ backgroundColor: 'var(--armada-primary)' }}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : 'Connecter'}
-          </button>
-        </div>
+    <button onClick={onOpen} className="group min-h-56 rounded-2xl border border-[var(--armada-accent)]/50 bg-[var(--armada-surface)] p-5 text-left transition-all hover:-translate-y-0.5 hover:border-[var(--armada-primary)]/40 hover:shadow-xl hover:shadow-black/5 focus:outline-none focus:ring-2 focus:ring-[var(--armada-primary)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] text-xl font-semibold">{connector.logo || connector.name[0]}</div>
+        <div className="flex flex-wrap justify-end gap-1.5"><TrustBadge tier={connector.verificationTier} />{connector.isBeta && <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-[10px] font-mono text-violet-500">BETA</span>}</div>
       </div>
-    </div>
+      <h3 className="mt-5 font-serif text-xl">{connector.name}</h3>
+      <p className="mt-1 text-[11px] font-mono uppercase tracking-wider text-[var(--armada-text)]/35">{connector.publisher} · {connector.transport === 'stdio' ? 'Runner isolé' : 'MCP distant'}</p>
+      <p className="mt-3 line-clamp-2 text-sm leading-relaxed text-[var(--armada-text)]/55">{connector.description}</p>
+      <div className="mt-5 flex items-center justify-between border-t border-[var(--armada-accent)]/40 pt-4 text-xs">
+        <span className="text-[var(--armada-text)]/40">{connector.connectionCount ? `${connector.connectionCount} compte${connector.connectionCount > 1 ? 's' : ''}` : 'Non connecté'}</span>
+        <span className="flex items-center gap-1 text-[var(--armada-primary)]">Configurer <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" /></span>
+      </div>
+    </button>
   );
 }
 
-// ── Custom MCP server form ────────────────────────────────────────────────────
+function ConnectWizard({ connector, agents, storeId, onClose }: { connector: Connector; agents: Agent[]; storeId: string; onClose: () => void }) {
+  const [step, setStep] = useState(0);
+  const [label, setLabel] = useState(connector.name);
+  const [scopes, setScopes] = useState<string[]>(connector.scopes || []);
+  const [agentIds, setAgentIds] = useState<string[]>([]);
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const oauth = connector.authMode !== 'secret';
+  const recommended = (agent: Agent) => {
+    const value = `${agent.type} ${agent.name}`.toLowerCase();
+    if (connector.category === 'analytics') return /seo|growth|analytics|major/.test(value);
+    if (connector.slug === 'gmail' || connector.slug === 'google-calendar') return /support|marketing|major|ops/.test(value);
+    return /content|marketing|major|product/.test(value);
+  };
 
-function CustomMcpForm({ onDone }: { onDone: () => Promise<any> }) {
-  const [form, setForm] = useState({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setAgentIds(agents.filter(recommended).map((agent) => agent.id)); }, [agents]);
 
-  const handleAdd = async () => {
-    const slug = form.slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    if (!slug || !form.url.trim()) { setError('Nom et URL sont requis.'); return; }
-    setSaving(true);
-    setError(null);
+  async function connect() {
+    setBusy(true); setError('');
     try {
-      const credentials: Record<string, any> = { url: form.url.trim() };
-      if (form.authHeader.trim()) credentials.headers = { Authorization: form.authHeader.trim() };
-      if (form.category.trim()) credentials.category = form.category.trim();
-      if (form.allowedTools.trim()) {
-        credentials.allowedTools = form.allowedTools.split(',').map(t => t.trim()).filter(Boolean);
+      if (oauth) {
+        const base = connector.authMode === 'oauth-google' ? '/api/auth/google' : '/api/mcp/oauth/start';
+        const query = new URLSearchParams({ slug: connector.slug, storeId, label, scopes: scopes.join(','), agentIds: agentIds.join(',') });
+        window.location.assign(`${base}?${query}`);
+        return;
       }
-      const res = await fetch('/api/integrations', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: `mcp:${slug}`, credentials }),
-      });
-      if (!res.ok) throw new Error('Échec de l\'enregistrement');
-      await onDone();
-      setForm({ slug: '', url: '', authHeader: '', category: '', allowedTools: '' });
-    } catch (e: any) {
-      setError(e?.message || 'Échec de l\'enregistrement');
-    } finally { setSaving(false); }
-  };
+      const response = await fetch('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connectorSlug: connector.slug, storeId, label, credentials: secrets }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Connexion impossible');
+      if (agentIds.length) await fetch(`/api/connections/${data.connection.id}/grants`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentIds }) });
+      onClose();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setBusy(false); }
+  }
 
-  const fields = [
-    { key: 'slug', label: 'Nom (slug)', placeholder: 'mon-serveur', type: 'text' },
-    { key: 'url', label: 'URL du serveur MCP (Streamable HTTP)', placeholder: 'https://mcp.exemple.com/mcp', type: 'text' },
-    { key: 'authHeader', label: 'En-tête Authorization (optionnel)', placeholder: 'Bearer sk_…', type: 'password' },
-    { key: 'category', label: 'Catégorie d\'outils (optionnel)', placeholder: 'marketing — défaut : mcp', type: 'text' },
-    { key: 'allowedTools', label: 'Outils autorisés (optionnel, virgules, * accepté)', placeholder: 'get_*, send_campaign', type: 'text' },
-  ] as const;
-
+  const steps = ['Compte', 'Accès', 'Agents', 'Vérification'];
   return (
-    <div className="space-y-3">
-      {fields.map(field => (
-        <div key={field.key}>
-          <label className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mb-1.5 block">
-            {field.label}
-          </label>
-          <input type={field.type} placeholder={field.placeholder}
-            value={form[field.key]}
-            onChange={e => setForm(prev => ({ ...prev, [field.key]: e.target.value }))}
-            className={inputClass} style={inputStyle}
-            autoComplete="off" data-lpignore="true" data-1p-ignore
-          />
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm md:items-center md:p-6" role="dialog" aria-modal="true" aria-label={`Connecter ${connector.name}`}>
+      <div className="max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-[var(--armada-accent)] bg-[var(--armada-surface)] shadow-2xl md:rounded-3xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--armada-accent)]/50 bg-[var(--armada-surface)]/95 px-6 py-5 backdrop-blur">
+          <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--armada-bg)] text-lg">{connector.logo}</div><div><h2 className="font-serif text-xl">Connecter {connector.name}</h2><p className="text-xs text-[var(--armada-text)]/40">Étape {step + 1} sur 4</p></div></div>
+          <button onClick={onClose} className="rounded-full p-2 hover:bg-[var(--armada-bg)]" aria-label="Fermer"><X className="h-4 w-4" /></button>
         </div>
-      ))}
-      <div className="flex items-center gap-2 pt-1">
-        <button onClick={handleAdd} disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-medium transition-all hover:opacity-90 disabled:opacity-40"
-          style={{ backgroundColor: 'var(--armada-primary)' }}>
-          {saving ? 'Connexion…' : 'Connecter le serveur'}
-        </button>
-        {error && (
-          <span className="text-xs text-red-500 font-mono flex items-center gap-1">
-            <AlertCircle className="h-3 w-3" />{error}
-          </span>
-        )}
+        <div className="px-6 pt-5"><div className="grid grid-cols-4 gap-2">{steps.map((item, index) => <div key={item}><div className={cn('h-1 rounded-full', index <= step ? 'bg-[var(--armada-primary)]' : 'bg-[var(--armada-accent)]')} /><p className={cn('mt-2 text-[10px] font-mono', index === step ? 'text-[var(--armada-text)]' : 'text-[var(--armada-text)]/30')}>{item}</p></div>)}</div></div>
+        <div className="min-h-80 p-6">
+          {step === 0 && <div className="space-y-5"><div><label className="mb-2 block text-xs font-medium">Nom de ce compte</label><input autoFocus value={label} onChange={(event) => setLabel(event.target.value)} className="w-full rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--armada-primary)]" placeholder="Ex. Gmail Support" /></div>{!oauth && connector.secretFields.map((field) => <div key={field.key}><label className="mb-2 block text-xs font-medium">{field.label}</label><input type="password" value={secrets[field.key] || ''} onChange={(event) => setSecrets({ ...secrets, [field.key]: event.target.value })} className="w-full rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--armada-primary)]" placeholder={field.placeholder} /></div>)}<div className="rounded-2xl border border-blue-500/15 bg-blue-500/5 p-4 text-sm text-[var(--armada-text)]/60"><ShieldCheck className="mb-2 h-5 w-5 text-blue-500" />Les identifiants sont chiffrés. Armada ne transmet ce compte qu’aux agents que vous confirmerez.</div></div>}
+          {step === 1 && <div><h3 className="font-serif text-2xl">Choisissez les accès</h3><p className="mt-2 text-sm text-[var(--armada-text)]/50">Les lectures sont automatiques. Toute modification demandera votre approbation.</p><div className="mt-5 space-y-2">{connector.scopes?.length ? connector.scopes.map((scope) => <label key={scope} className="flex cursor-pointer items-start gap-3 rounded-xl border border-[var(--armada-accent)]/60 p-3 hover:bg-[var(--armada-bg)]"><input type="checkbox" checked={scopes.includes(scope)} onChange={() => setScopes((current) => current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope])} className="mt-1 accent-[var(--armada-primary)]" /><div><p className="text-sm">{scope.includes('readonly') ? 'Lecture' : 'Création et modification'}</p><p className="break-all text-[10px] font-mono text-[var(--armada-text)]/35">{scope}</p></div></label>) : <div className="rounded-xl border border-[var(--armada-accent)] p-4 text-sm text-[var(--armada-text)]/50">Les autorisations seront affichées par le fournisseur pendant OAuth.</div>}</div></div>}
+          {step === 2 && <div><h3 className="font-serif text-2xl">Confirmez les agents</h3><p className="mt-2 text-sm text-[var(--armada-text)]/50">Suggestions basées sur leur rôle. Aucun autre agent n’aura accès.</p><div className="mt-5 grid gap-2 sm:grid-cols-2">{agents.map((agent) => <label key={agent.id} className={cn('flex cursor-pointer items-center gap-3 rounded-xl border p-4 transition-colors', agentIds.includes(agent.id) ? 'border-[var(--armada-primary)] bg-[var(--armada-primary)]/5' : 'border-[var(--armada-accent)]')}><input type="checkbox" checked={agentIds.includes(agent.id)} onChange={() => setAgentIds((current) => current.includes(agent.id) ? current.filter((id) => id !== agent.id) : [...current, agent.id])} className="accent-[var(--armada-primary)]" /><div><p className="text-sm font-medium">{agent.name}</p><p className="text-[10px] font-mono uppercase text-[var(--armada-text)]/35">{agent.type}</p></div>{recommended(agent) && <Sparkles className="ml-auto h-3.5 w-3.5 text-[var(--armada-primary)]" />}</label>)}</div></div>}
+          {step === 3 && <div><h3 className="font-serif text-2xl">Prêt à connecter</h3><div className="mt-5 divide-y divide-[var(--armada-accent)]/50 rounded-2xl border border-[var(--armada-accent)]/60">{[['Compte', label], ['Accès', `${scopes.length || 'OAuth'} autorisation(s)`], ['Agents', `${agentIds.length} agent(s)`], ['Écritures', 'Approbation requise']].map(([key, value]) => <div key={key} className="flex items-center justify-between px-4 py-3 text-sm"><span className="text-[var(--armada-text)]/45">{key}</span><span>{value}</span></div>)}</div><div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-500/15 bg-amber-500/5 p-4 text-xs leading-relaxed text-[var(--armada-text)]/55"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />Les e-mails et documents sont considérés comme du contenu externe non fiable. Les résultats bruts ne sont pas conservés dans l’historique Armada.</div></div>}
+          {error && <p className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-500">{error}</p>}
+        </div>
+        <div className="flex items-center justify-between border-t border-[var(--armada-accent)]/50 px-6 py-4"><button disabled={step === 0 || busy} onClick={() => setStep((value) => value - 1)} className="flex items-center gap-2 rounded-full px-4 py-2 text-sm disabled:opacity-30"><ArrowLeft className="h-4 w-4" />Retour</button>{step < 3 ? <button disabled={!label.trim()} onClick={() => setStep((value) => value + 1)} className="flex items-center gap-2 rounded-full bg-[var(--armada-text)] px-5 py-2.5 text-sm text-[var(--armada-bg)]">Continuer <ArrowRight className="h-4 w-4" /></button> : <button disabled={busy} onClick={connect} className="flex items-center gap-2 rounded-full bg-[var(--armada-primary)] px-5 py-2.5 text-sm text-white disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}{oauth ? 'Autoriser et connecter' : 'Connecter'}</button>}</div>
       </div>
     </div>
   );
 }
 
-// ── App card ──────────────────────────────────────────────────────────────────
+function ConnectionPanel({ connection, agents, onClose, refresh }: { connection: Connection; agents: Agent[]; onClose: () => void; refresh: () => void }) {
+  const [agentIds, setAgentIds] = useState(connection.grants.map((grant) => grant.agentId));
+  const [selectedAgent, setSelectedAgent] = useState(connection.grants[0]?.agentId || '');
+  const [policies, setPolicies] = useState<Record<string, string>>(() => Object.fromEntries(connection.policies.filter((item) => item.agentId === connection.grants[0]?.agentId).map((item) => [item.toolName, item.mode])));
+  const [busy, setBusy] = useState(false);
 
-function AppCard({
-  app, isConnected, mcpInfo, onConnect, onDisconnect,
-}: {
-  app: CatalogApp;
-  isConnected: boolean;
-  mcpInfo?: { status: string; toolCount: number; error?: string };
-  onConnect: (app: CatalogApp) => void;
-  onDisconnect: (app: CatalogApp) => void;
-}) {
-  const hasError = isConnected && app.kind === 'mcp' && mcpInfo?.status === 'error';
-  const needsReauth = mcpInfo?.status === 'reauth_required';
-  const oneClick = Boolean(connectUrlFor(app));
-  return (
-    <div
-      className={cn(
-        'relative rounded-2xl border transition-all duration-200 overflow-hidden',
-        isConnected
-          ? 'border-[var(--armada-primary)]/30'
-          : 'border-[var(--armada-accent)]/50 hover:border-[var(--armada-primary)]/20'
-      )}
-      style={{ backgroundColor: 'var(--armada-surface)' }}
-    >
-      {isConnected && (
-        <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ backgroundColor: 'var(--armada-primary)' }} />
-      )}
-
-      <div className="p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl border border-[var(--armada-accent)]/50 flex items-center justify-center text-base font-bold shrink-0"
-              style={{ backgroundColor: 'var(--armada-bg)' }}>
-              {app.logo}
-            </div>
-            <div>
-              <div className="text-sm font-medium text-[var(--armada-text)]">{app.name}</div>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-[var(--armada-text)]/30">
-                {app.kind === 'mcp' ? 'via MCP' : app.kind === 'shopify' ? 'API Shopify' : CATALOG_CATEGORIES.find(c => c.id === app.category)?.label}
-              </div>
-            </div>
-          </div>
-          {needsReauth ? (
-            <span title={mcpInfo?.error}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-amber-500/20 text-amber-400 shrink-0"
-              style={{ backgroundColor: 'color-mix(in srgb, #f59e0b 8%, transparent)' }}>
-              <RefreshCw className="h-2.5 w-2.5" />Reconnexion requise
-            </span>
-          ) : hasError ? (
-            <span title={mcpInfo?.error}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-red-500/20 text-red-400 shrink-0"
-              style={{ backgroundColor: 'color-mix(in srgb, #ef4444 8%, transparent)' }}>
-              <AlertCircle className="h-2.5 w-2.5" />Erreur
-            </span>
-          ) : isConnected && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono border border-green-500/20 text-green-400 shrink-0"
-              style={{ backgroundColor: 'color-mix(in srgb, #22c55e 8%, transparent)' }}>
-              <Check className="h-2.5 w-2.5" />
-              {app.kind === 'mcp' && mcpInfo ? `${mcpInfo.toolCount} outils` : 'Connecté'}
-            </span>
-          )}
-        </div>
-
-        <p className="text-xs text-[var(--armada-text)]/55 leading-relaxed">{app.description}</p>
-
-        {app.kind === 'shopify' ? (
-          <Link href="/stores"
-            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs font-medium text-[var(--armada-text)]/70 hover:text-[var(--armada-text)] transition-colors">
-            <ShoppingBag className="h-3 w-3" />
-            {isConnected ? 'Gérer depuis Boutiques' : 'Connecter depuis Boutiques'}
-          </Link>
-        ) : app.unavailable ? (
-          <div className="space-y-1.5">
-            <button disabled
-              className="w-full py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs font-mono text-[var(--armada-text)]/30 cursor-not-allowed">
-              Indisponible
-            </button>
-            {app.note && (
-              <p className="text-[10px] text-[var(--armada-text)]/35 leading-relaxed">{app.note}</p>
-            )}
-          </div>
-        ) : isConnected ? (
-          <div className="flex gap-2">
-            {needsReauth ? (
-              <button onClick={() => onConnect(app)}
-                className="flex-1 py-2 rounded-full text-xs font-medium text-white hover:opacity-90 transition-all"
-                style={{ backgroundColor: 'var(--armada-primary)' }}>
-                Reconnecter
-              </button>
-            ) : (
-              <span className="flex-1 py-2 text-center text-xs font-mono text-[var(--armada-text)]/30">Actif</span>
-            )}
-            <button onClick={() => onDisconnect(app)}
-              className="px-3 py-2 rounded-full border border-[var(--armada-accent)]/50 text-xs text-[var(--armada-text)]/40 hover:text-red-400 hover:border-red-400/30 transition-colors">
-              Déconnecter
-            </button>
-          </div>
-        ) : (
-          <button onClick={() => onConnect(app)}
-            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium text-white hover:opacity-90 transition-all"
-            style={{ backgroundColor: 'var(--armada-primary)' }}>
-            <Plug className="h-3 w-3" />
-            {oneClick ? `Se connecter avec ${app.category === 'google' ? 'Google' : app.name}` : 'Connecter'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
+  useEffect(() => setPolicies(Object.fromEntries(connection.policies.filter((item) => item.agentId === selectedAgent).map((item) => [item.toolName, item.mode]))), [selectedAgent, connection.policies]);
+  async function saveAgents() { setBusy(true); await fetch(`/api/connections/${connection.id}/grants`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentIds }) }); setBusy(false); refresh(); }
+  async function savePolicies() { if (!selectedAgent) return; setBusy(true); await fetch(`/api/connections/${connection.id}/policies`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId: selectedAgent, policies: Object.entries(policies).map(([toolName, mode]) => ({ toolName, mode })) }) }); setBusy(false); refresh(); }
+  async function remove() { if (!window.confirm(`Déconnecter ${connection.label} ?`)) return; setBusy(true); await fetch(`/api/connections/${connection.id}`, { method: 'DELETE' }); refresh(); onClose(); }
+  const status = STATUS[connection.status] || STATUS.error;
+  return <div className="fixed inset-0 z-[100] flex justify-end bg-black/50 backdrop-blur-sm" role="dialog" aria-modal="true"><div className="h-full w-full max-w-2xl overflow-y-auto border-l border-[var(--armada-accent)] bg-[var(--armada-surface)] shadow-2xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--armada-accent)] bg-[var(--armada-surface)]/95 p-6 backdrop-blur"><div><div className="flex items-center gap-2"><span className={cn('h-2 w-2 rounded-full', status.dot)} /><span className="text-[10px] font-mono uppercase text-[var(--armada-text)]/45">{status.label}</span></div><h2 className="mt-1 font-serif text-2xl">{connection.label}</h2><p className="text-sm text-[var(--armada-text)]/40">{connection.connector.name}{connection.accountEmail ? ` · ${connection.accountEmail}` : ''}</p></div><button onClick={onClose} className="rounded-full p-2 hover:bg-[var(--armada-bg)]"><X className="h-4 w-4" /></button></div><div className="space-y-8 p-6">{connection.lastError && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-500">{connection.lastError}</div>}<section><div className="mb-3 flex items-center justify-between"><div><h3 className="font-medium">Agents autorisés</h3><p className="text-xs text-[var(--armada-text)]/40">Accès explicite à ce compte uniquement.</p></div><button onClick={saveAgents} disabled={busy} className="rounded-full bg-[var(--armada-text)] px-4 py-2 text-xs text-[var(--armada-bg)]">Enregistrer</button></div><div className="grid gap-2 sm:grid-cols-2">{agents.map((agent) => <label key={agent.id} className="flex items-center gap-3 rounded-xl border border-[var(--armada-accent)] p-3"><input type="checkbox" checked={agentIds.includes(agent.id)} onChange={() => setAgentIds((current) => current.includes(agent.id) ? current.filter((id) => id !== agent.id) : [...current, agent.id])} /><span className="text-sm">{agent.name}</span><span className="ml-auto text-[10px] font-mono text-[var(--armada-text)]/30">{agent.type}</span></label>)}</div></section><section><div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-medium">Politiques des outils</h3><p className="text-xs text-[var(--armada-text)]/40">Lecture automatique, écriture avec approbation par défaut.</p></div><select value={selectedAgent} onChange={(event) => setSelectedAgent(event.target.value)} className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-3 py-2 text-xs"><option value="">Choisir un agent</option>{connection.grants.map((grant) => <option key={grant.agentId} value={grant.agentId}>{grant.agent.name}</option>)}</select></div>{connection.discoveredTools?.length ? <div className="overflow-hidden rounded-2xl border border-[var(--armada-accent)]"><div className="divide-y divide-[var(--armada-accent)]/50">{connection.discoveredTools.map((tool) => <div key={tool.name} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><code className="truncate text-xs">{tool.name}</code><span className={cn('rounded-full px-2 py-0.5 text-[9px] font-mono', tool.readOnly ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500')}>{tool.readOnly ? 'LECTURE' : 'ÉCRITURE'}</span></div><p className="mt-1 line-clamp-1 text-xs text-[var(--armada-text)]/40">{tool.description}</p></div><select disabled={!selectedAgent} value={policies[tool.name] || (tool.readOnly ? 'automatic' : 'approval')} onChange={(event) => setPolicies({ ...policies, [tool.name]: event.target.value })} className="rounded-lg border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-3 py-2 text-xs"><option value="blocked">Bloqué</option><option value="automatic">Automatique</option><option value="approval">Approbation</option></select></div>)}</div><div className="flex justify-end border-t border-[var(--armada-accent)] p-3"><button onClick={savePolicies} disabled={!selectedAgent || busy} className="rounded-full bg-[var(--armada-primary)] px-4 py-2 text-xs text-white disabled:opacity-40">Enregistrer les politiques</button></div></div> : <div className="rounded-xl border border-dashed border-[var(--armada-accent)] p-6 text-center text-sm text-[var(--armada-text)]/40">Les outils apparaîtront après le premier test de connexion.</div>}</section><section className="flex flex-wrap gap-2 border-t border-[var(--armada-accent)] pt-6"><button onClick={async () => { setBusy(true); await fetch(`/api/connections/${connection.id}/test`, { method: 'POST' }); setBusy(false); refresh(); }} className="flex items-center gap-2 rounded-full border border-[var(--armada-accent)] px-4 py-2 text-xs"><RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />Tester</button><button onClick={remove} className="ml-auto flex items-center gap-2 rounded-full border border-red-500/20 px-4 py-2 text-xs text-red-500"><Trash2 className="h-3.5 w-3.5" />Déconnecter</button></section></div></div></div>;
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+function CustomConnectorModal({ storeId, onClose, onDone }: { storeId: string; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ name: '', slug: '', url: '', label: '', authHeader: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function submit() {
+    setBusy(true); setError('');
+    const response = await fetch('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ storeId, customUrl: form.url, name: form.name, slug: form.slug, label: form.label || form.name, authHeader: form.authHeader }) });
+    const data = await response.json();
+    if (response.status === 409 && data.oauthUrl) { window.location.assign(data.oauthUrl); return; }
+    if (!response.ok) { setError(data.error || 'Connexion impossible'); setBusy(false); return; }
+    onDone();
+  }
+  return <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/55 backdrop-blur-sm md:items-center md:p-6"><div className="w-full max-w-xl rounded-t-3xl border border-[var(--armada-accent)] bg-[var(--armada-surface)] p-6 shadow-2xl md:rounded-3xl"><div className="flex items-start justify-between"><div><p className="text-[10px] font-mono uppercase tracking-widest text-violet-500">Avancé</p><h2 className="mt-1 font-serif text-2xl">Serveur MCP personnalisé</h2><p className="mt-2 text-sm text-[var(--armada-text)]/45">URL Streamable HTTP publique. OAuth MCP est utilisé si aucun header n’est fourni.</p></div><button onClick={onClose} className="rounded-full p-2 hover:bg-[var(--armada-bg)]"><X className="h-4 w-4" /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nom de l’app" className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm sm:col-span-1" /><input value={form.slug} onChange={(event) => setForm({ ...form, slug: event.target.value })} placeholder="Identifiant court" className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm" /><input value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} placeholder="https://mcp.exemple.com/mcp" className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm sm:col-span-2" /><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Nom du compte" className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm" /><input type="password" value={form.authHeader} onChange={(event) => setForm({ ...form, authHeader: event.target.value })} placeholder="Bearer … (optionnel)" className="rounded-xl border border-[var(--armada-accent)] bg-[var(--armada-bg)] px-4 py-3 text-sm" /></div><div className="mt-4 flex gap-2 rounded-xl border border-amber-500/15 bg-amber-500/5 p-3 text-xs text-[var(--armada-text)]/50"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />Armada bloque les réseaux privés, identifiants dans l’URL, commandes locales et packages non certifiés.</div>{error && <p className="mt-3 text-sm text-red-500">{error}</p>}<div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-full px-4 py-2 text-sm">Annuler</button><button disabled={busy || !form.name || !form.url} onClick={submit} className="flex items-center gap-2 rounded-full bg-[var(--armada-primary)] px-5 py-2.5 text-sm text-white disabled:opacity-40">{busy && <Loader2 className="h-4 w-4 animate-spin" />}Connecter</button></div></div></div>;
+}
 
 export default function IntegrationsPage() {
-  const { activeStore, activeStoreId } = useActiveStore();
-  const [activeCategory, setActiveCategory] = useState('all');
+  const featureEnabled = process.env.NEXT_PUBLIC_MCP_CONNECTOR_PLATFORM_V2 !== 'false';
+  const { activeStoreId } = useActiveStore();
+  const [tab, setTab] = useState<'discover' | 'connected'>('discover');
   const [search, setSearch] = useState('');
-  const [modalApp, setModalApp] = useState<CatalogApp | null>(null);
-  const [showCustomForm, setShowCustomForm] = useState(false);
-  const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [category, setCategory] = useState('all');
+  const [trust, setTrust] = useState('all');
+  const [wizard, setWizard] = useState<Connector | null>(null);
+  const [panel, setPanel] = useState<Connection | null>(null);
+  const [showCustom, setShowCustom] = useState(false);
+  const [banner, setBanner] = useState<{ kind: string; text: string } | null>(null);
+  const { data: catalogData, isLoading: catalogLoading, mutate: refreshCatalog } = useSWR(activeStoreId ? `/api/connectors?storeId=${activeStoreId}` : null, fetcher);
+  const { data: connectionData, isLoading: connectionLoading, mutate: refreshConnections } = useSWR(activeStoreId ? `/api/connections?storeId=${activeStoreId}` : null, fetcher, { refreshInterval: 30000 });
+  const { data: agentData } = useSWR(activeStoreId ? `/api/agents?storeId=${activeStoreId}` : null, fetcher);
+  const connectors: Connector[] = catalogData?.connectors || [];
+  const connections: Connection[] = connectionData?.connections || [];
+  const agents: Agent[] = agentData?.agents || [];
+  const categories = ['all', ...Array.from(new Set(connectors.map((item) => item.category)))];
+  const filtered = useMemo(() => connectors.filter((item) => (category === 'all' || item.category === category) && (trust === 'all' || item.verificationTier === trust) && (!search || `${item.name} ${item.description} ${item.publisher}`.toLowerCase().includes(search.toLowerCase()))), [connectors, category, trust, search]);
 
-  // Une app en un clic quitte la page pour l'écran de consentement, puis
-  // revient ici : c'est au retour qu'on demande au gateway de monter le serveur.
-  const startConnect = (app: CatalogApp) => {
-    const url = connectUrlFor(app);
-    if (url) window.location.href = url;
-    else setModalApp(app);
-  };
-
-  const { data, mutate } = useSWR(
-    activeStoreId ? `/api/integrations?storeId=${activeStoreId}` : '/api/integrations',
-    fetcher
-  );
-  // Real MCP server state reported by the gateway (connected/error + tool count)
-  const { data: mcpStatusData, mutate: mutateStatus } = useSWR('/api/integrations/sync', fetcher);
-  const mcpStatus: Record<string, { status: string; toolCount: number; error?: string }> = {};
-  for (const s of mcpStatusData?.servers || []) mcpStatus[s.slug] = s;
-
-  // Ask the gateway to reconnect/disconnect MCP servers, return fresh statuses
-  const syncGateway = async () => {
-    const res = await fetch('/api/integrations/sync', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'Synchronisation gateway échouée');
-    await mutateStatus(data, { revalidate: false });
-    return (data.servers || []) as { slug: string; status: string; error?: string }[];
-  };
-
-  // Retour d'un flow OAuth : le gateway doit monter (ou retirer) le serveur avant
-  // que les agents y aient accès. On nettoie ensuite l'URL pour éviter un rejeu.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const outcome = params.get('mcp') ?? params.get('gsc');
-    if (!outcome) return;
-
-    const slug = params.get('slug') ?? 'Google Search Console';
-    window.history.replaceState({}, '', '/integrations');
-
-    if (outcome === 'connected') {
-      (async () => {
-        await mutate();
-        try {
-          const servers = await syncGateway();
-          const status = servers.find(s => s.slug === slug);
-          if (status && status.status !== 'connected') {
-            setBanner({ kind: 'err', text: status.error || `${slug} : le gateway n'a pas pu monter ce serveur.` });
-          } else {
-            setBanner({ kind: 'ok', text: `${slug} connecté.` });
-          }
-        } catch {
-          setBanner({ kind: 'err', text: 'Autorisation enregistrée, mais le gateway est injoignable.' });
-        }
-      })();
-    } else if (outcome === 'denied') {
-      setBanner({ kind: 'err', text: 'Autorisation refusée.' });
-    } else {
-      setBanner({ kind: 'err', text: `Échec de la connexion : ${params.get('reason') || 'erreur inconnue'}` });
-    }
-    // Ce flow ne doit se rejouer qu'au montage, jamais sur re-render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (params.get('mcp') === 'connected') { setBanner({ kind: 'ok', text: 'Compte connecté. Vérification des outils MCP en cours…' }); setTab('connected'); refreshConnections(); refreshCatalog(); window.history.replaceState({}, '', '/integrations'); }
+    else if (params.get('mcp') === 'error' || params.get('mcp') === 'denied') { setBanner({ kind: 'error', text: `Connexion interrompue : ${params.get('reason') || 'autorisation refusée'}` }); window.history.replaceState({}, '', '/integrations'); }
   }, []);
 
-  const integrations: any[] = (data?.integrations || []).filter((i: any) => i.isActive);
-  const connectedPlatforms = new Set(integrations.map((i: any) => i.platform));
-
-  const catalogSlugs = new Set(CATALOG.map(a => `mcp:${a.slug}`));
-  const customServers = integrations.filter(
-    (i: any) => i.platform?.startsWith('mcp:') && !catalogSlugs.has(i.platform)
-  );
-
-  const isAppConnected = (app: CatalogApp) =>
-    app.kind === 'shopify' ? Boolean(activeStore)
-      : app.kind === 'mcp' ? connectedPlatforms.has(`mcp:${app.slug}`)
-      : connectedPlatforms.has(app.nativePlatform || app.slug);
-
-  const filtered = CATALOG.filter(app => {
-    const matchCat = activeCategory === 'all' || app.category === activeCategory;
-    const matchSearch = !search
-      || app.name.toLowerCase().includes(search.toLowerCase())
-      || app.description.toLowerCase().includes(search.toLowerCase());
-    return matchCat && matchSearch;
-  });
-
-  const connectedCount = CATALOG.filter(isAppConnected).length + customServers.length;
-
-  const handleSave = async (app: CatalogApp, values: Record<string, string>) => {
-    const platform = app.kind === 'mcp' ? `mcp:${app.slug}` : (app.nativePlatform || app.slug);
-    const credentials = app.kind === 'mcp' ? buildMcpCredentials(app, values) : values;
-    const res = await fetch('/api/integrations', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, credentials, storeId: activeStoreId }),
-    });
-    if (!res.ok) throw new Error('Échec de la connexion');
-    await mutate();
-
-    if (app.kind === 'native') {
-      // Enable the gateway's gated native tools right away (Klaviyo, Telegram…)
-      try { await syncGateway(); } catch { /* gateway offline: tools enable at next boot */ }
-    }
-
-    if (app.kind === 'mcp') {
-      // Real check: the gateway must actually connect the server. If it can't,
-      // roll back the row and surface the real error instead of a fake "Connecté".
-      const servers = await syncGateway();
-      const status = servers.find(s => s.slug === app.slug);
-      if (!status || status.status !== 'connected') {
-        await fetch(`/api/integrations?platform=${encodeURIComponent(platform)}`, { method: 'DELETE' });
-        await mutate();
-        throw new Error(status?.error || 'Le gateway n\'a pas pu se connecter à ce serveur MCP');
-      }
-    }
-  };
-
-  const disconnectPlatform = async (platforms: string[]) => {
-    await Promise.all(platforms.map(p =>
-      fetch(`/api/integrations?platform=${encodeURIComponent(p)}`, { method: 'DELETE' })
-    ));
-    await mutate();
-    // Make the gateway drop the tools immediately — agents lose access now.
-    try { await syncGateway(); } catch { /* gateway offline: rows are gone, sync happens at next boot */ }
-  };
-
-  const handleDisconnect = (app: CatalogApp) => {
-    // Delete both the MCP row and any legacy native row (e.g. `notion`) so
-    // integration-gated native tools are disabled too.
-    const platforms = app.kind === 'mcp'
-      ? [`mcp:${app.slug}`, app.slug]
-      : [app.nativePlatform || app.slug];
-    disconnectPlatform(platforms);
-  };
-
-  return (
-    <div className="min-h-screen" style={{ backgroundColor: 'var(--armada-bg)', color: 'var(--armada-text)' }}>
-      {/* ── Header ── */}
-      <div className="border-b border-[var(--armada-accent)]/50 px-4 md:px-6 py-4 md:py-5"
-        style={{ backgroundColor: 'var(--armada-surface)' }}>
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="font-serif tracking-tight text-xl md:text-2xl text-[var(--armada-text)]">Apps</h1>
-            <p className="text-[10px] font-mono text-[var(--armada-text)]/40 uppercase tracking-widest mt-0.5">
-              Vos agents accèdent aux apps via MCP — {connectedCount} connectée{connectedCount !== 1 ? 's' : ''}
-            </p>
-          </div>
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--armada-text)]/30" />
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Rechercher une app…"
-              className={cn(inputClass, 'pl-9')} style={inputStyle} />
-          </div>
-        </div>
-
-        <div className="flex gap-1.5 mt-4 overflow-x-auto pb-1">
-          {CATALOG_CATEGORIES.map(cat => (
-            <button key={cat.id} onClick={() => setActiveCategory(cat.id)}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono whitespace-nowrap transition-colors',
-                activeCategory === cat.id
-                  ? 'text-[var(--armada-text)]'
-                  : 'text-[var(--armada-text)]/50 hover:text-[var(--armada-text)] hover:bg-[var(--armada-surface-hover)]'
-              )}
-              style={activeCategory === cat.id ? { backgroundColor: 'var(--armada-text)', color: 'var(--armada-bg)' } : {}}>
-              {cat.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="p-4 md:p-6 space-y-8">
-        {banner && (
-          <div className={cn(
-            'flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs',
-            banner.kind === 'ok'
-              ? 'border-green-500/25 text-green-400'
-              : 'border-red-500/25 text-red-400'
-          )}>
-            <span className="flex items-center gap-2">
-              {banner.kind === 'ok' ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
-              {banner.text}
-            </span>
-            <button onClick={() => setBanner(null)} className="opacity-50 hover:opacity-100">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* ── Catalog grid ── */}
-        {filtered.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-sm text-[var(--armada-text)]/40">Aucune app trouvée</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filtered.map(app => (
-              <AppCard key={app.slug} app={app}
-                isConnected={isAppConnected(app)}
-                mcpInfo={mcpStatus[app.slug]}
-                onConnect={startConnect}
-                onDisconnect={handleDisconnect}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* ── Custom MCP servers ── */}
-        <section className="space-y-3 max-w-2xl">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Server className="h-3.5 w-3.5 text-[var(--armada-text)]/40" />
-              <h2 className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/50">
-                Serveurs MCP personnalisés
-              </h2>
-            </div>
-            <button onClick={() => setShowCustomForm(v => !v)}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-[var(--armada-accent)] text-[10px] font-mono text-[var(--armada-text)]/60 hover:bg-[var(--armada-surface-hover)] transition-colors uppercase tracking-widest">
-              {showCustomForm ? <><X className="h-3 w-3" />Annuler</> : <><Plus className="h-3 w-3" />Ajouter</>}
-            </button>
-          </div>
-
-          <div className="rounded-2xl border border-[var(--armada-accent)]/50 overflow-hidden"
-            style={{ backgroundColor: 'var(--armada-surface)' }}>
-            {customServers.length === 0 && !showCustomForm && (
-              <p className="px-5 py-4 text-xs text-[var(--armada-text)]/40">
-                Connectez n&apos;importe quel serveur MCP (URL Streamable HTTP) — ses outils seront exposés à vos agents.
-              </p>
-            )}
-            {customServers.map((server: any) => (
-              <div key={server.platform}
-                className="px-5 py-3 flex items-center justify-between border-b border-[var(--armada-accent)]/30 last:border-b-0">
-                <div className="flex items-center gap-3">
-                  <Globe className="h-3.5 w-3.5 text-green-500" />
-                  <span className="text-xs font-mono text-[var(--armada-text)]/80">{server.platform.slice(4)}</span>
-                </div>
-                <button onClick={() => disconnectPlatform([server.platform])}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-500/20 text-red-500 text-[10px] font-mono hover:bg-red-500/10 transition-colors">
-                  <Unplug className="h-3 w-3" />Retirer
-                </button>
-              </div>
-            ))}
-            {showCustomForm && (
-              <div className={cn('p-5', customServers.length > 0 && 'border-t border-[var(--armada-accent)]/50')}>
-                <CustomMcpForm onDone={async () => { await mutate(); await syncGateway(); setShowCustomForm(false); }} />
-              </div>
-            )}
-          </div>
-
-          <p className="text-[10px] font-mono text-[var(--armada-text)]/40 leading-relaxed">
-            Par défaut, seuls les outils annotés lecture seule s&apos;exécutent sans approbation — le reste passe
-            par le flux d&apos;approbation (Mission Control / Telegram). La connexion est appliquée
-            immédiatement — le badge indique le nombre d&apos;outils réellement exposés aux agents.
-          </p>
-        </section>
-      </div>
-
-      {modalApp && (
-        <ConnectModal app={modalApp} onClose={() => setModalApp(null)}
-          onSave={values => handleSave(modalApp, values)} />
-      )}
-    </div>
-  );
+  async function syncRegistry() { setBanner({ kind: 'ok', text: 'Recherche du registre MCP…' }); await fetch('/api/connectors/registry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: search }) }); await refreshCatalog(); setBanner({ kind: 'ok', text: 'Catalogue communautaire actualisé.' }); }
+  const loading = catalogLoading || connectionLoading;
+  if (!featureEnabled) return <div className="p-8"><div className="rounded-2xl border border-[var(--armada-accent)] bg-[var(--armada-surface)] p-8"><h1 className="font-serif text-2xl">Apps & outils</h1><p className="mt-2 text-sm text-[var(--armada-text)]/50">La nouvelle plateforme MCP est désactivée pour cet environnement.</p></div></div>;
+  return <div className="min-h-screen bg-[var(--armada-bg)] text-[var(--armada-text)]"><header className="border-b border-[var(--armada-accent)]/50 bg-[var(--armada-surface)]"><div className="mx-auto max-w-7xl px-4 py-6 md:px-6"><div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between"><div><div className="mb-2 flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--armada-primary)]"><Sparkles className="h-3.5 w-3.5" />Connector Platform v2</div><h1 className="font-serif text-3xl tracking-tight md:text-4xl">Apps & outils</h1><p className="mt-2 max-w-xl text-sm text-[var(--armada-text)]/50">Connectez vos comptes, choisissez les agents autorisés et gardez le contrôle sur chaque action.</p></div><div className="flex rounded-full border border-[var(--armada-accent)] bg-[var(--armada-bg)] p-1"><button onClick={() => setTab('discover')} className={cn('rounded-full px-5 py-2 text-xs transition-colors', tab === 'discover' && 'bg-[var(--armada-text)] text-[var(--armada-bg)]')}>Découvrir</button><button onClick={() => setTab('connected')} className={cn('rounded-full px-5 py-2 text-xs transition-colors', tab === 'connected' && 'bg-[var(--armada-text)] text-[var(--armada-bg)]')}>Connectées <span className="ml-1 opacity-60">{connections.length}</span></button></div></div></div></header><main className="mx-auto max-w-7xl p-4 md:p-6">{banner && <div className={cn('mb-5 flex items-center justify-between rounded-xl border p-4 text-sm', banner.kind === 'ok' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-600' : 'border-red-500/20 bg-red-500/5 text-red-500')}><span className="flex items-center gap-2">{banner.kind === 'ok' ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}{banner.text}</span><button onClick={() => setBanner(null)}><X className="h-4 w-4" /></button></div>}{!activeStoreId ? <div className="rounded-2xl border border-dashed border-[var(--armada-accent)] p-12 text-center"><CircleOff className="mx-auto h-8 w-8 text-[var(--armada-text)]/25" /><p className="mt-3">Sélectionnez une boutique pour gérer ses connexions.</p></div> : tab === 'discover' ? <><div className="mb-6 grid gap-3 md:grid-cols-[1fr_auto_auto_auto]"><div className="relative"><Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--armada-text)]/30" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher Gmail, Drive, Notion…" className="w-full rounded-full border border-[var(--armada-accent)] bg-[var(--armada-surface)] py-3 pl-11 pr-4 text-sm outline-none focus:border-[var(--armada-primary)]" /></div><select value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-full border border-[var(--armada-accent)] bg-[var(--armada-surface)] px-4 text-xs"><option value="all">Toutes catégories</option>{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select><select value={trust} onChange={(event) => setTrust(event.target.value)} className="rounded-full border border-[var(--armada-accent)] bg-[var(--armada-surface)] px-4 text-xs"><option value="all">Tous niveaux</option><option value="armada_verified">Vérifié Armada</option><option value="publisher_verified">Éditeur vérifié</option><option value="community">Communauté</option></select><button onClick={syncRegistry} className="flex items-center justify-center gap-2 rounded-full border border-[var(--armada-accent)] bg-[var(--armada-surface)] px-4 py-3 text-xs"><Server className="h-3.5 w-3.5" />Registre MCP</button></div>{loading ? <div className="flex justify-center py-24"><Loader2 className="h-6 w-6 animate-spin text-[var(--armada-primary)]" /></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{filtered.map((connector) => <ConnectorCard key={connector.id} connector={connector} onOpen={() => setWizard(connector)} />)}</div>}<div className="mt-10 rounded-2xl border border-dashed border-[var(--armada-accent)] bg-[var(--armada-surface)]/40 p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><div className="rounded-xl bg-violet-500/10 p-2 text-violet-500"><Plus className="h-5 w-5" /></div><div><h3 className="font-medium">Serveur MCP personnalisé</h3><p className="mt-1 text-xs text-[var(--armada-text)]/45">HTTPS public uniquement. Les commandes et packages arbitraires sont bloqués.</p></div></div><button onClick={() => setShowCustom(true)} className="rounded-full border border-[var(--armada-accent)] px-4 py-2 text-xs hover:border-violet-500/40">Ajouter un serveur</button></div></div></> : <>{connections.length === 0 ? <div className="rounded-3xl border border-dashed border-[var(--armada-accent)] py-20 text-center"><Unplug className="mx-auto h-8 w-8 text-[var(--armada-text)]/25" /><h2 className="mt-4 font-serif text-2xl">Aucune app connectée</h2><p className="mt-2 text-sm text-[var(--armada-text)]/45">Connectez un premier compte puis confirmez les agents autorisés.</p><button onClick={() => setTab('discover')} className="mt-5 rounded-full bg-[var(--armada-primary)] px-5 py-2.5 text-sm text-white">Découvrir les apps</button></div> : <div className="grid gap-4 lg:grid-cols-2">{connections.map((connection) => { const state = STATUS[connection.status] || STATUS.error; return <button key={connection.id} onClick={() => setPanel(connection)} className="rounded-2xl border border-[var(--armada-accent)] bg-[var(--armada-surface)] p-5 text-left transition-colors hover:border-[var(--armada-primary)]/40"><div className="flex items-start gap-4"><div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--armada-bg)] text-lg">{connection.connector.logo}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{connection.label}</h3>{connection.connector.isBeta && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] text-violet-500">BETA</span>}</div><p className="mt-0.5 truncate text-xs text-[var(--armada-text)]/40">{connection.accountEmail || connection.connector.name}</p></div><ChevronRight className="h-4 w-4 text-[var(--armada-text)]/25" /></div><div className="mt-5 grid grid-cols-3 divide-x divide-[var(--armada-accent)] border-t border-[var(--armada-accent)] pt-4"><div><p className="text-[10px] font-mono text-[var(--armada-text)]/35">ÉTAT</p><p className="mt-1 flex items-center gap-1.5 text-xs"><span className={cn('h-2 w-2 rounded-full', state.dot)} />{state.label}</p></div><div className="pl-4"><p className="text-[10px] font-mono text-[var(--armada-text)]/35">AGENTS</p><p className="mt-1 text-xs">{connection.grants.length}</p></div><div className="pl-4"><p className="text-[10px] font-mono text-[var(--armada-text)]/35">OUTILS</p><p className="mt-1 text-xs">{connection.discoveredTools?.length || 0}</p></div></div></button>; })}</div>}</>}</main>{showCustom && activeStoreId && <CustomConnectorModal storeId={activeStoreId} onClose={() => setShowCustom(false)} onDone={() => { setShowCustom(false); refreshConnections(); refreshCatalog(); setTab('connected'); }} />}{wizard && activeStoreId && <ConnectWizard connector={wizard} agents={agents} storeId={activeStoreId} onClose={() => { setWizard(null); refreshConnections(); refreshCatalog(); }} />}{panel && <ConnectionPanel connection={panel} agents={agents} onClose={() => setPanel(null)} refresh={() => { refreshConnections().then((data) => { const updated = data?.connections?.find((item: Connection) => item.id === panel.id); if (updated) setPanel(updated); }); refreshCatalog(); }} />}</div>;
 }

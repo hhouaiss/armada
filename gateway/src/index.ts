@@ -52,13 +52,10 @@ import {
   updateArticleTool,
 } from './tools/shopify/content.js';
 import { getStoreInfoTool } from './tools/shopify/store.js';
-import { googleSearchConsoleTools } from './tools/google-search-console.js';
-import { callKlaviyoApiTool, callKlaviyoApiWriteTool } from './tools/klaviyo.js';
 import { dispatchToSpecialistTool } from './tools/dispatch-agent.js';
 import { parallelDispatchTool } from './tools/parallel-dispatch.js';
 import { manageAgentsTool } from './tools/manage-agents.js';
 import { memoryReadTool, memoryWriteTool } from './tools/memory.js';
-import { notionTools } from './tools/notion.js';
 import { inboxCompleteTool } from './tools/inbox.js';
 import { checkDreamSchedule } from './workers/auto-dream.js';
 import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
@@ -157,11 +154,9 @@ async function bootstrap() {
   // Integration-gated tools: MCP servers (platform "mcp:<slug>") + native tools
   // that only exist while their integration is active. Re-synced at runtime via
   // POST /api/mcp/sync when the user connects/disconnects an app in the web UI.
-  await initIntegrationSync(toolRegistry, {
-    notion: notionTools,
-    klaviyo: [callKlaviyoApiTool, callKlaviyoApiWriteTool],
-    'google-search-console': googleSearchConsoleTools,
-  });
+  // Shopify is the only native business API surface. Every other app tool is
+  // mounted dynamically through the isolated MCP connector runner.
+  await initIntegrationSync(toolRegistry);
 
   console.log(`\n✓ Registered ${toolRegistry.listAll().length} tools\n`);
 
