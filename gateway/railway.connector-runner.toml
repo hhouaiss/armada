@@ -14,3 +14,9 @@ healthcheckTimeout = 30
 # CONNECTOR_RUNNER_TOKEN, DATABASE_URL, DIRECT_URL, ENCRYPTION_KEY
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 # RAILPACK_DEPLOY_APT_PACKAGES="uv python3"
+#
+# Do NOT set CONNECTOR_RUNNER_PORT here: the runner binds Railway's injected $PORT,
+# which is the port the healthcheck above probes.
+# The gateway service must point at this one over the private network:
+#   CONNECTOR_RUNNER_URL=http://<this-service>.railway.internal:$PORT
+#   CONNECTOR_RUNNER_TOKEN=<same token as here>

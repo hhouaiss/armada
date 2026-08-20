@@ -82,6 +82,11 @@ function ConnectWizard({ connector, agents, storeId, onClose }: { connector: Con
   const recommended = (agent: Agent) => {
     const value = `${agent.type} ${agent.name}`.toLowerCase();
     if (connector.category === 'analytics') return /seo|growth|analytics|major/.test(value);
+    if (connector.category === 'marketing') return /marketing|growth|content|major/.test(value);
+    if (connector.category === 'support') return /support|service|client|major/.test(value);
+    if (connector.category === 'finance') return /finance|compta|ops|major/.test(value);
+    if (connector.category === 'creative') return /content|design|marketing|major/.test(value);
+    if (connector.category === 'engineering') return /dev|tech|ops|major/.test(value);
     if (connector.slug === 'gmail' || connector.slug === 'google-calendar') return /support|marketing|major|ops/.test(value);
     return /content|marketing|major|product/.test(value);
   };

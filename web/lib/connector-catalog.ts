@@ -109,6 +109,65 @@ export const CURATED_CONNECTORS: CuratedConnector[] = [
     transport: 'streamable-http', authMode: 'secret', verificationTier: 'publisher_verified', capabilities: ['Paiements', 'Clients', 'Abonnements'],
     secretFields: [{ key: 'apiKey', label: 'Clé secrète Stripe', placeholder: 'sk_live_…', bearer: true }],
   },
+
+  // Remote MCP servers published by the vendor, all OAuth 2.1 with Dynamic Client
+  // Registration — the merchant connects them without ever pasting a secret.
+  // Endpoints and DCR support verified against each publisher's
+  // /.well-known/oauth-authorization-server before being curated here.
+  {
+    slug: 'klaviyo', name: 'Klaviyo', logo: 'K', publisher: 'Klaviyo', category: 'marketing',
+    description: 'Campagnes, flows, segments, profils et rapports e-mail/SMS.', endpoint: 'https://mcp.klaviyo.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Campagnes et flows', 'Listes et segments', 'Profils clients', 'Rapports de performance'],
+  },
+  {
+    slug: 'intercom', name: 'Intercom', logo: '💬', publisher: 'Intercom', category: 'support',
+    description: 'Consulter les conversations, contacts et articles du support.', endpoint: 'https://mcp.intercom.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Rechercher les conversations', 'Lire les contacts', 'Consulter les articles'],
+  },
+  {
+    slug: 'canva', name: 'Canva', logo: '🎨', publisher: 'Canva', category: 'creative',
+    description: 'Rechercher, créer et exporter des visuels et gabarits de marque.', endpoint: 'https://mcp.canva.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Rechercher des designs', 'Créer depuis un gabarit', 'Exporter des visuels'],
+  },
+  {
+    slug: 'paypal', name: 'PayPal', logo: '💳', publisher: 'PayPal', category: 'finance',
+    description: 'Consulter transactions, litiges et factures PayPal.', endpoint: 'https://mcp.paypal.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Transactions', 'Litiges', 'Factures'],
+  },
+  {
+    slug: 'square', name: 'Square', logo: '⬜', publisher: 'Block', category: 'finance',
+    description: 'Paiements, catalogue et clients Square.', endpoint: 'https://mcp.squareup.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Paiements', 'Catalogue', 'Clients'],
+  },
+  {
+    slug: 'linear', name: 'Linear', logo: '📐', publisher: 'Linear', category: 'productivity',
+    description: 'Suivre et créer les tickets, projets et cycles produit.', endpoint: 'https://mcp.linear.app/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Rechercher les tickets', 'Créer et mettre à jour', 'Suivre les projets'],
+  },
+  {
+    slug: 'asana', name: 'Asana', logo: '✅', publisher: 'Asana', category: 'productivity',
+    description: 'Consulter et gérer les tâches, projets et portefeuilles.', endpoint: 'https://mcp.asana.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Lister les tâches', 'Créer et assigner', 'Suivre les projets'],
+  },
+  {
+    slug: 'sentry', name: 'Sentry', logo: '🐛', publisher: 'Sentry', category: 'engineering',
+    description: 'Analyser les erreurs et incidents de la boutique.', endpoint: 'https://mcp.sentry.dev/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['Lister les erreurs', 'Analyser une exception', 'Suivre les releases'],
+  },
+  {
+    slug: 'cloudflare', name: 'Cloudflare', logo: '☁️', publisher: 'Cloudflare', category: 'engineering',
+    description: 'Consulter DNS, cache, analytics et règles de sécurité.', endpoint: 'https://mcp.cloudflare.com/mcp',
+    transport: 'streamable-http', authMode: 'oauth-mcp', verificationTier: 'publisher_verified',
+    capabilities: ['DNS et cache', 'Analytics', 'Règles de sécurité'],
+  },
 ];
 
 export async function ensureCuratedConnectors(prisma: any) {

@@ -4,6 +4,7 @@ import dns from 'node:dns/promises';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -15,7 +16,7 @@ import { defaultMcpPolicy, exposedMcpToolName, isPrivateNetworkAddress } from '.
 
 config();
 
-const PORT = Number(process.env.CONNECTOR_RUNNER_PORT || 18796);
+const PORT = Number(process.env.CONNECTOR_RUNNER_PORT || process.env.PORT || 18796);
 const SERVICE_TOKEN = process.env.CONNECTOR_RUNNER_TOKEN || '';
 if (process.env.NODE_ENV === 'production' && !SERVICE_TOKEN) {
   throw new Error('CONNECTOR_RUNNER_TOKEN is required in production');
@@ -25,6 +26,8 @@ const MAX_RESULT = 1024 * 1024;
 const MAX_TOOLS = 128;
 const MAX_SCHEMA = 64 * 1024;
 const MAX_CONCURRENT = 4;
+/** Directory holding the compiled runner — sibling of the Armada MCP adapters. */
+const RUNNER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 interface State {
   id: string;
@@ -139,7 +142,14 @@ async function connect(row: any): Promise<State> {
     }
     await client.connect(new StdioClientTransport({
       command: packageConfig.command,
-      args: packageConfig.args,
+      // Armada-maintained adapters (`node dist/gsc-mcp.js`) are pinned as paths relative
+      // to the build output. Resolve them against this module's own directory so the
+      // spawn does not depend on the runner's working directory.
+      args: packageConfig.command === 'node'
+        ? packageConfig.args.map((arg: string) => (typeof arg === 'string' && arg.startsWith('dist/')
+          ? path.resolve(RUNNER_DIR, arg.slice('dist/'.length))
+          : arg))
+        : packageConfig.args,
       env: {
         PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
         LANG: process.env.LANG || 'C.UTF-8',
@@ -293,13 +303,14 @@ async function readBody(req: http.IncomingMessage): Promise<any> {
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
+  // Unauthenticated liveness probe — Railway's healthcheck cannot send the service token.
+  if (req.method === 'GET' && req.url === '/health') {
+    res.end(JSON.stringify({ ok: true, connections: states.size })); return;
+  }
   if (SERVICE_TOKEN && req.headers.authorization !== `Bearer ${SERVICE_TOKEN}`) {
     res.writeHead(401); res.end(JSON.stringify({ error: 'Unauthorized' })); return;
   }
   try {
-    if (req.method === 'GET' && req.url === '/health') {
-      res.end(JSON.stringify({ ok: true, connections: states.size })); return;
-    }
     if (req.method === 'POST' && req.url === '/internal/sync') {
       res.end(JSON.stringify({ connections: await sync() })); return;
     }
