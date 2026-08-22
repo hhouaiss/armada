@@ -56,6 +56,32 @@ async function validateRemoteUrl(value: string): Promise<URL> {
   return url;
 }
 
+/**
+ * Google's Workspace MCP endpoints (gmailmcp/drivemcp/… .googleapis.com) answer
+ * `tools/list` and `tools/call` with a complete, valid JSON-RPC result but an
+ * HTTP 403 status. The SDK only looks at the status and aborts the connection,
+ * so a Gmail connector never finishes discovery. Unwrap that specific case:
+ * a 403 whose body is a well-formed JSON-RPC *result* is passed through as a
+ * 200. A 403 carrying a JSON-RPC error, or anything unparseable, still fails.
+ */
+const mcpFetch: typeof fetch = async (input, init) => {
+  const response = await fetch(input as any, init);
+  if (response.ok || response.status !== 403) return response;
+  const text = await response.text().catch(() => '');
+  let payload: any;
+  try { payload = JSON.parse(text); } catch { payload = undefined; }
+  const messages = Array.isArray(payload) ? payload : [payload];
+  const salvageable = messages.length > 0 && messages.every((message) =>
+    message && message.jsonrpc === '2.0' && message.id !== undefined && 'result' in message);
+  if (!salvageable) return new Response(text, { status: response.status, statusText: response.statusText });
+  const headers = new Headers();
+  for (const key of ['content-type', 'mcp-session-id', 'mcp-protocol-version']) {
+    const value = response.headers.get(key);
+    if (value) headers.set(key, value);
+  }
+  return new Response(text, { status: 200, headers });
+};
+
 function decryptConfig(credentials: any): Record<string, any> {
   if (!credentials?.encrypted) throw new Error('Missing encrypted credentials');
   return JSON.parse(decrypt(credentials.encrypted));
@@ -129,13 +155,16 @@ async function connect(row: any): Promise<State> {
       : undefined;
     await client.connect(new StreamableHTTPClientTransport(endpoint, {
       authProvider,
+      fetch: mcpFetch,
       requestInit: { ...(Object.keys(headers).length ? { headers } : {}), redirect: 'error' },
     }));
   } else if (definition.transport === 'stdio') {
     if (definition.verificationTier !== 'armada_verified') throw new Error('Package connector is not Armada verified');
     const packageConfig = definition.packageConfig as any;
     if (!packageConfig?.command || !Array.isArray(packageConfig.args)) throw new Error('Invalid pinned package definition');
-    if (!['uvx', 'node'].includes(packageConfig.command)) throw new Error('Package command is not on the Armada runner allowlist');
+    // Node only: the runner image ships no Python toolchain, so a `uvx` command
+    // would fail late with a bare `spawn uvx ENOENT` instead of a clear rejection.
+    if (packageConfig.command !== 'node') throw new Error('Package command is not on the Armada runner allowlist');
     const env = { ...(packageConfig.env || {}), ...(credentials.env || {}) };
     if (credentials.refresh_token) {
       const credentialDir = path.join(process.env.CONNECTOR_CREDENTIAL_DIR || '/tmp/armada-connectors', row.id);

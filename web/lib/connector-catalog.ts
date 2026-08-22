@@ -82,13 +82,13 @@ export const CURATED_CONNECTORS: CuratedConnector[] = [
     capabilities: ['Rechercher les conversations', 'Lire et envoyer des messages'],
   },
   {
-    slug: 'google-analytics', name: 'Google Analytics', logo: '📊', publisher: 'Google Analytics', category: 'analytics',
+    slug: 'google-analytics', name: 'Google Analytics', logo: '📊', publisher: 'Armada', category: 'analytics',
     description: 'Analyser les propriétés GA4, rapports, tunnels et temps réel.',
-    transport: 'stdio', authMode: 'oauth-google', verificationTier: 'armada_verified', isBeta: true,
-    version: '0.7.0', packageConfig: { command: 'uvx', args: ['analytics-mcp==0.7.0'] },
+    transport: 'stdio', authMode: 'oauth-google', verificationTier: 'armada_verified',
+    version: '2.0.0', packageConfig: { command: 'node', args: ['dist/ga4-mcp.js'] },
     scopes: ['https://www.googleapis.com/auth/analytics.readonly'],
     capabilities: ['Lister les propriétés', 'Lancer des rapports', 'Analyser les tunnels et le temps réel'],
-    docsUrl: 'https://github.com/googleanalytics/google-analytics-mcp',
+    docsUrl: 'https://developers.google.com/analytics/devguides/reporting/data/v1',
   },
   {
     slug: 'google-search-console', name: 'Google Search Console', logo: '🔎', publisher: 'Armada', category: 'analytics',
