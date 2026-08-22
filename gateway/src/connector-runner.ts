@@ -83,10 +83,12 @@ const mcpFetch: typeof fetch = async (input, init) => {
 };
 
 /**
- * Google's MCP endpoints proxy the underlying product API using the *caller's*
- * Cloud project. When that project has not enabled the product API, the MCP
- * server answers with a bare `The caller does not have permission`, which tells
- * a merchant nothing. Map the connector back to the API that must be enabled.
+ * Google's Workspace MCP endpoints are served by their own Cloud services
+ * (gmailmcp.googleapis.com, drivemcp.googleapis.com, …) which proxy the
+ * underlying product API using the *caller's* Cloud project. Two separate
+ * services must be enabled: the MCP endpoint itself AND the product API.
+ * Enabling only the product API still yields a bare
+ * `The caller does not have permission`, so name both explicitly.
  */
 const GOOGLE_BACKING_API: Record<string, string> = {
   gmail: 'gmail.googleapis.com',
@@ -99,10 +101,26 @@ const GOOGLE_BACKING_API: Record<string, string> = {
   'google-chat': 'chat.googleapis.com',
 };
 
-function explainConnectorError(slug: string, message: string): string {
-  const api = GOOGLE_BACKING_API[slug];
-  if (!api || !/caller does not have permission|has not been used in project|PERMISSION_DENIED/i.test(message)) return message;
-  return `${message} — enable ${api} (and the matching *mcp.googleapis.com* API) in the Google Cloud project behind GOOGLE_CLIENT_ID, then retry.`;
+function explainConnectorError(slug: string, message: string, endpoint?: string | null): string {
+  const productApi = GOOGLE_BACKING_API[slug];
+  if (!productApi || !/caller does not have permission|has not been used in project|PERMISSION_DENIED/i.test(message)) {
+    return message;
+  }
+  // The MCP service is the endpoint's own host (e.g. gmailmcp.googleapis.com)
+  // — that is the name to enable, not the product API alone.
+  let mcpApi: string | null = null;
+  try {
+    if (endpoint) mcpApi = new URL(endpoint).hostname;
+  } catch {
+    mcpApi = null;
+  }
+  const toEnable = mcpApi ? `${mcpApi} AND ${productApi}` : productApi;
+  return (
+    `${message} — enable ${toEnable} in the Google Cloud project behind GOOGLE_CLIENT_ID ` +
+    `(console.cloud.google.com/apis/library), then retry. Enabling only ${productApi} is not enough: ` +
+    `the MCP endpoint is a separate service. If both are already enabled, the stored OAuth token predates ` +
+    `the current scopes — reconnect the ${slug} connection to re-consent.`
+  );
 }
 
 function decryptConfig(credentials: any): Record<string, any> {
@@ -341,7 +359,7 @@ async function execute(input: any) {
     let data: any = raw.content;
     if (text) { try { data = JSON.parse(text); } catch { data = text; } }
     const result = raw.isError
-      ? { success: false, error: explainConnectorError(row.connector.slug, typeof data === 'string' ? data.slice(0, 1000) : 'MCP tool failed') }
+      ? { success: false, error: explainConnectorError(row.connector.slug, typeof data === 'string' ? data.slice(0, 1000) : 'MCP tool failed', row.connector.endpoint) }
       : { success: true, data };
     await prisma.$transaction([
       prisma.appConnection.update({ where: { id: row.id }, data: { lastUsedAt: new Date(), lastHealthAt: new Date(), lastError: null } }),
