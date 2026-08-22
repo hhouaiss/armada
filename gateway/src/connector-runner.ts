@@ -106,20 +106,23 @@ function explainConnectorError(slug: string, message: string, endpoint?: string 
   if (!productApi || !/caller does not have permission|has not been used in project|PERMISSION_DENIED/i.test(message)) {
     return message;
   }
-  // The MCP service is the endpoint's own host (e.g. gmailmcp.googleapis.com)
-  // — that is the name to enable, not the product API alone.
-  let mcpApi: string | null = null;
+  let mcpApi = `${slug.replace(/-/g, '')}mcp.googleapis.com`;
   try {
     if (endpoint) mcpApi = new URL(endpoint).hostname;
   } catch {
-    mcpApi = null;
+    /* keep the derived default */
   }
-  const toEnable = mcpApi ? `${mcpApi} AND ${productApi}` : productApi;
+  // Google's Workspace MCP services are in Developer Preview. A project that is
+  // not allowlisted returns a bare PERMISSION_DENIED on every tools/call even
+  // though the API shows as enabled, the scopes are granted and the token is
+  // fresh — so telling merchants to re-consent or re-enable APIs sends them in
+  // circles. Verify allowlisting first; it is the usual cause.
   return (
-    `${message} — enable ${toEnable} in the Google Cloud project behind GOOGLE_CLIENT_ID ` +
-    `(console.cloud.google.com/apis/library), then retry. Enabling only ${productApi} is not enough: ` +
-    `the MCP endpoint is a separate service. If both are already enabled, the stored OAuth token predates ` +
-    `the current scopes — reconnect the ${slug} connection to re-consent.`
+    `${message} — ${mcpApi} is a Google Workspace MCP service in Developer Preview. ` +
+    `Confirm the project is allowlisted: \`gcloud services list --enabled | grep mcp\` must list ${mcpApi}. ` +
+    `If it does not (even when the Cloud console shows it as enabled), the project needs enrollment in the ` +
+    `Google Workspace Developer Preview Program — reconnecting the account will NOT help, the existing token ` +
+    `is already valid. Also ensure ${productApi} is enabled.`
   );
 }
 
