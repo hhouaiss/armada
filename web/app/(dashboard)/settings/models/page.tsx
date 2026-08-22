@@ -25,9 +25,9 @@ const PROVIDERS = {
   openrouter: {
     name: 'OpenRouter (Open Source)',
     icon: '🌐',
-    description: 'Access open source models like DeepSeek V4, Kimi K2.5, Llama, Mistral and more',
+    description: 'Access open source models like Ox Alpha, DeepSeek V4, Kimi K2.5, Llama, Mistral and more',
     pricing: 'Varies by model – from $0.07 to $3/1M tokens',
-    models: ['DeepSeek V4 Pro (capable)', 'DeepSeek V4 Flash (cheapest)', 'Kimi K2.5 (262K context)', 'and 100+ open source models'],
+    models: ['Ox Alpha (1M context, free preview)', 'DeepSeek V4 Pro (capable)', 'DeepSeek V4 Flash (cheapest)', 'Kimi K2.5 (262K context)', 'and 100+ open source models'],
     keyPlaceholder: 'sk-or-...',
   },
 };
