@@ -42,6 +42,21 @@ export interface McpOAuthState {
   /** RFC 8707 resource indicator, pinned at authorization time. */
   resource?: string;
   scope?: string;
+  /** Redirect URI registered at authorization time — replayed on refresh. */
+  redirectUri?: string;
+}
+
+/**
+ * The SDK treats a provider without a `redirectUrl` as a non-interactive grant
+ * (client_credentials / jwt-bearer) and never tries the refresh token — it fails
+ * with "Either provider.prepareTokenRequest() or authorizationCode is required".
+ * Returning the same redirect URI the authorization used keeps us on the
+ * authorization_code + refresh_token path.
+ */
+function oauthRedirectUrl(state: McpOAuthState): string | undefined {
+  if (state.redirectUri) return state.redirectUri;
+  const base = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL;
+  return base ? `${base.replace(/\/$/, '')}/api/mcp/oauth/callback` : undefined;
 }
 
 const CLIENT_METADATA: OAuthClientMetadata = {
@@ -65,8 +80,7 @@ export class IntegrationOAuthProvider implements OAuthClientProvider {
   }
 
   get redirectUrl(): string | undefined {
-    // Set at authorization time by the web app; unused for refresh.
-    return undefined;
+    return oauthRedirectUrl(this.oauthState);
   }
 
   get clientMetadata(): OAuthClientMetadata {
@@ -96,7 +110,7 @@ export class IntegrationOAuthProvider implements OAuthClientProvider {
     if (!encrypted) return;
 
     const config = JSON.parse(decrypt(encrypted));
-    config.oauth = { ...(config.oauth ?? {}), tokens };
+    config.oauth = { ...(config.oauth ?? {}), redirectUri: this.redirectUrl, tokens };
 
     await prisma.integration.update({
       where: { id: this.integrationId },
@@ -137,7 +151,7 @@ export class AppConnectionOAuthProvider implements OAuthClientProvider {
     this.tokenState = oauthState.tokens;
   }
 
-  get redirectUrl(): string | undefined { return undefined; }
+  get redirectUrl(): string | undefined { return oauthRedirectUrl(this.oauthState); }
   get clientMetadata(): OAuthClientMetadata { return CLIENT_METADATA; }
   clientInformation(): OAuthClientInformationMixed { return this.oauthState.clientInformation; }
   tokens(): OAuthTokens | undefined { return this.tokenState; }
@@ -148,7 +162,7 @@ export class AppConnectionOAuthProvider implements OAuthClientProvider {
     const encrypted = (row?.credentials as any)?.encrypted;
     if (!encrypted) return;
     const config = JSON.parse(decrypt(encrypted));
-    config.oauth = { ...(config.oauth || this.oauthState), tokens };
+    config.oauth = { ...(config.oauth || this.oauthState), redirectUri: this.redirectUrl, tokens };
     await prisma.appConnection.update({
       where: { id: this.connectionId },
       data: { credentials: { encrypted: encrypt(JSON.stringify(config)) }, lastConnectedAt: new Date(), lastError: null },

@@ -58,6 +58,9 @@ export async function GET(request: NextRequest) {
         clientInformation: pending.clientInformation,
         resource: pending.resource,
         scope: pending.scope,
+        // Needed by the gateway's refresh: the SDK skips the refresh_token grant
+        // when the provider exposes no redirect URI.
+        redirectUri: pending.redirectUri,
         tokens,
       },
     };
