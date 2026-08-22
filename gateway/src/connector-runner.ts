@@ -78,12 +78,16 @@ async function refreshGoogleCredentials(row: any, credentials: Record<string, an
   return updated;
 }
 
-function validateTools(tools: any[]) {
+function validateTools(slug: string, tools: any[]) {
   if (tools.length > MAX_DISCOVERED_TOOLS) throw new Error(`Connector exposes ${tools.length} tools, more than the ${MAX_DISCOVERED_TOOLS} supported`);
-  for (const tool of tools) {
-    if (JSON.stringify(tool.inputSchema || {}).length > MAX_SCHEMA) throw new Error(`Tool schema too large: ${tool.name}`);
+  // An oversized schema would blow up every agent prompt, but it is one bad tool —
+  // drop it rather than losing the whole connector.
+  const kept = tools.filter((tool) => JSON.stringify(tool.inputSchema || {}).length <= MAX_SCHEMA);
+  if (kept.length < tools.length) {
+    const dropped = tools.filter((tool) => !kept.includes(tool)).map((tool) => tool.name);
+    console.warn(`  ⚠️ ${slug}: ${dropped.length} tool(s) skipped, schema over ${MAX_SCHEMA} bytes: ${dropped.join(', ')}`);
   }
-  return tools;
+  return kept;
 }
 
 async function connect(row: any): Promise<State> {
@@ -100,7 +104,7 @@ async function connect(row: any): Promise<State> {
   client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
     if (!state) return;
     try {
-      state.tools = validateTools((await client.listTools()).tools);
+      state.tools = validateTools(row.connector.slug, (await client.listTools()).tools);
       await prisma.appConnection.update({
         where: { id: row.id },
         data: {
@@ -165,7 +169,7 @@ async function connect(row: any): Promise<State> {
     throw new Error(`Unsupported connector transport: ${definition.transport}`);
   }
 
-  const listed = validateTools((await client.listTools()).tools);
+  const listed = validateTools(definition.slug, (await client.listTools()).tools);
   state = { id: row.id, configFingerprint: fingerprint, client, tools: listed, activeCalls: 0 };
   states.set(row.id, state);
   return state;
