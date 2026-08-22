@@ -82,6 +82,29 @@ const mcpFetch: typeof fetch = async (input, init) => {
   return new Response(text, { status: 200, headers });
 };
 
+/**
+ * Google's MCP endpoints proxy the underlying product API using the *caller's*
+ * Cloud project. When that project has not enabled the product API, the MCP
+ * server answers with a bare `The caller does not have permission`, which tells
+ * a merchant nothing. Map the connector back to the API that must be enabled.
+ */
+const GOOGLE_BACKING_API: Record<string, string> = {
+  gmail: 'gmail.googleapis.com',
+  'google-drive': 'drive.googleapis.com',
+  'google-calendar': 'calendar-json.googleapis.com',
+  'google-docs': 'docs.googleapis.com',
+  'google-sheets': 'sheets.googleapis.com',
+  'google-slides': 'slides.googleapis.com',
+  'google-people': 'people.googleapis.com',
+  'google-chat': 'chat.googleapis.com',
+};
+
+function explainConnectorError(slug: string, message: string): string {
+  const api = GOOGLE_BACKING_API[slug];
+  if (!api || !/caller does not have permission|has not been used in project|PERMISSION_DENIED/i.test(message)) return message;
+  return `${message} — enable ${api} (and the matching *mcp.googleapis.com* API) in the Google Cloud project behind GOOGLE_CLIENT_ID, then retry.`;
+}
+
 function decryptConfig(credentials: any): Record<string, any> {
   if (!credentials?.encrypted) throw new Error('Missing encrypted credentials');
   return JSON.parse(decrypt(credentials.encrypted));
@@ -317,7 +340,9 @@ async function execute(input: any) {
     const text = (raw.content || []).filter((part: any) => part.type === 'text').map((part: any) => part.text).join('\n');
     let data: any = raw.content;
     if (text) { try { data = JSON.parse(text); } catch { data = text; } }
-    const result = raw.isError ? { success: false, error: typeof data === 'string' ? data.slice(0, 1000) : 'MCP tool failed' } : { success: true, data };
+    const result = raw.isError
+      ? { success: false, error: explainConnectorError(row.connector.slug, typeof data === 'string' ? data.slice(0, 1000) : 'MCP tool failed') }
+      : { success: true, data };
     await prisma.$transaction([
       prisma.appConnection.update({ where: { id: row.id }, data: { lastUsedAt: new Date(), lastHealthAt: new Date(), lastError: null } }),
       prisma.connectorAuditEvent.create({ data: {
