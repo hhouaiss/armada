@@ -24,3 +24,24 @@ export function parseGrantedScopes(
 
   return { granted, missing, partial: missing.length > 0 };
 }
+
+/**
+ * Scopes a connector declares that its live connection did not receive.
+ *
+ * Returns [] when we have nothing to compare against — a connection with no
+ * recorded scopes (secret-auth connectors, or rows created before scopes were
+ * tracked) must not be reported as missing everything.
+ */
+export function missingConnectionScopes(
+  declaredScopes: string[] | undefined,
+  grantedScopes: string[] | undefined
+): string[] {
+  if (!declaredScopes?.length || !grantedScopes?.length) return [];
+  const grantedSet = new Set(grantedScopes);
+  return declaredScopes.filter((scope) => !grantedSet.has(scope));
+}
+
+/** `https://www.googleapis.com/auth/gmail.compose` → `gmail.compose` */
+export function shortScopeLabel(scope: string): string {
+  return scope.replace(/^https?:\/\/[^/]+\/auth\//, '').replace(/^https?:\/\//, '');
+}
