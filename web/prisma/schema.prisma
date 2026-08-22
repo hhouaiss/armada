@@ -209,6 +209,7 @@ model AppConnection {
   credentials           Json
   grantedScopes         Json      @default("[]")
   discoveredTools       Json      @default("[]")
+  disabledTools         Json      @default("[]")
   status                String    @default("review_required")
   isDefault             Boolean   @default(false)
   lastConnectedAt       DateTime?

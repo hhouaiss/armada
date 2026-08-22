@@ -23,7 +23,10 @@ if (process.env.NODE_ENV === 'production' && !SERVICE_TOKEN) {
 }
 const MAX_BODY = 256 * 1024;
 const MAX_RESULT = 1024 * 1024;
-const MAX_TOOLS = 128;
+/** Absolute ceiling on what a single server may advertise — a runaway server must not exhaust the runner. */
+const MAX_DISCOVERED_TOOLS = 512;
+/** Above this many *enabled* tools an agent's tool selection degrades; surfaced as a warning, not a hard stop. */
+const TOOL_BUDGET = 128;
 const MAX_SCHEMA = 64 * 1024;
 const MAX_CONCURRENT = 4;
 /** Directory holding the compiled runner — sibling of the Armada MCP adapters. */
@@ -76,7 +79,7 @@ async function refreshGoogleCredentials(row: any, credentials: Record<string, an
 }
 
 function validateTools(tools: any[]) {
-  if (tools.length > MAX_TOOLS) throw new Error(`Connector exposes more than ${MAX_TOOLS} tools`);
+  if (tools.length > MAX_DISCOVERED_TOOLS) throw new Error(`Connector exposes ${tools.length} tools, more than the ${MAX_DISCOVERED_TOOLS} supported`);
   for (const tool of tools) {
     if (JSON.stringify(tool.inputSchema || {}).length > MAX_SCHEMA) throw new Error(`Tool schema too large: ${tool.name}`);
   }
@@ -168,6 +171,10 @@ async function connect(row: any): Promise<State> {
   return state;
 }
 
+function disabledFor(row: any): Set<string> {
+  return new Set(Array.isArray(row.disabledTools) ? row.disabledTools.map(String) : []);
+}
+
 async function sync() {
   const rows = await prisma.appConnection.findMany({
     where: { status: { in: ['active', 'error', 'reauth_required'] } },
@@ -204,6 +211,7 @@ async function sync() {
       errors.set(row.id, message);
       await prisma.appConnection.update({ where: { id: row.id }, data: { status: /401|unauthor|invalid_grant/i.test(message) ? 'reauth_required' : 'error', lastHealthAt: new Date(), lastError: message.slice(0, 500) } }).catch(() => {});
     }
+    const disabled = disabledFor(row);
     result.push({
       id: row.id,
       storeId: row.storeId,
@@ -214,7 +222,10 @@ async function sync() {
       error: state ? undefined : errors.get(row.id),
       agentIds: row.grants.map((grant) => grant.agentId),
       policies: Object.fromEntries(row.policies.map((policy) => [policy.toolName, policy.mode])),
-      tools: (state?.tools || []).map((tool: any) => {
+      disabledTools: [...disabled],
+      toolBudget: TOOL_BUDGET,
+      // Disabled tools stay in `discoveredTools` for the dashboard, but never reach an agent's registry.
+      tools: (state?.tools || []).filter((tool: any) => !disabled.has(tool.name)).map((tool: any) => {
         const override = ((row.connector.riskOverrides as Record<string, any>) || {})[tool.name] || {};
         return {
           name: tool.name,
