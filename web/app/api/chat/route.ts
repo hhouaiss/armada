@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { storeId, agentId, content } = await request.json();
+    const { storeId, agentId, content, attachments } = await request.json();
 
     if (!storeId || !agentId || !content) {
       return NextResponse.json(
@@ -46,13 +46,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save user message
+    // Save user message — image attachments (data URLs) live in metadata so
+    // the chat UI can replay them from history.
+    const images = Array.isArray(attachments)
+      ? attachments
+          .filter((a: any) => a && typeof a.url === 'string')
+          .slice(0, 5)
+          .map((a: any) => ({
+            type: 'image',
+            mediaType: a.mediaType,
+            name: a.name,
+            url: a.url,
+          }))
+      : [];
+
     const userMessage = await prisma.chatMessage.create({
       data: {
         storeId,
         agentId,
         sender: 'user',
         content,
+        ...(images.length > 0 ? { metadata: { attachments: images } } : {}),
       },
     });
 

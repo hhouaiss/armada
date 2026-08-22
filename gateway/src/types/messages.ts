@@ -25,6 +25,14 @@ export const PingMessageSchema = z.object({
   type: z.literal('ping'),
 });
 
+/** An image sent along with a chat message (base64 or data: URL payload). */
+export const ChatAttachmentSchema = z.object({
+  type: z.literal('image').default('image'),
+  mediaType: z.string().optional(),
+  data: z.string(),
+  name: z.string().optional(),
+});
+
 export const ChatMessageSchema = z.object({
   type: z.literal('chat'),
   messageId: z.string(),
@@ -32,6 +40,7 @@ export const ChatMessageSchema = z.object({
   agentId: z.string(),
   message: z.string(),
   conversationId: z.string().optional(),
+  attachments: z.array(ChatAttachmentSchema).max(5).optional(),
 });
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { LLMProvider, LLMResponse, LLMTool } from '../types.js';
+import { buildOpenAIUserContent } from '../../attachments.js';
 
 /**
  * OpenAI Provider - Handles OpenAI API calls with model-specific configurations
@@ -102,10 +103,12 @@ export class OpenAIProvider implements LLMProvider {
           // Note: We skip additional text content when there are valid tool results
           // The text content will be included in the next user message naturally
         } else {
-          // Regular user message
+          // Regular user message — may carry image blocks (multimodal)
           openAIMessages.push({
             role: 'user',
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+            content: (typeof msg.content === 'string'
+              ? msg.content
+              : buildOpenAIUserContent(content as any[])) as any,
           });
         }
       } else if (msg.role === 'assistant') {

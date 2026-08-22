@@ -19,6 +19,13 @@ import { decryptToken, ShopifyClient } from '../lib/shopify-client.js';
 import { readObjectivesTool } from '../tools/read-objectives.js';
 import { nanoid } from 'nanoid';
 import { runAutoDream, setDreamEnabled, isDreamEnabled } from '../workers/auto-dream.js';
+import {
+  ChatAttachment,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_IMAGE_BYTES,
+  normalizeAttachment,
+  toDataUrl,
+} from '../lib/attachments.js';
 import { setKairosEnabled } from '../workers/kairos-worker.js';
 
 // ─── chatId ↔ storeId mapping helpers ────────────────────────────────────────
@@ -84,7 +91,16 @@ async function linkChatToStore(chatId: string, storeId: string): Promise<void> {
 
 export class TelegramIntegration {
   private bot: Bot;
+  private botToken: string;
   private router: Router;
+  /**
+   * Telegram sends an album as N separate messages sharing a media_group_id.
+   * Buffer them briefly so the agent receives all the images in one turn.
+   */
+  private mediaGroups = new Map<
+    string,
+    { attachments: ChatAttachment[]; caption: string; timer: NodeJS.Timeout }
+  >();
   private toolRegistry: ToolRegistry;
   private sessionManager: SessionManager;
 
@@ -95,6 +111,7 @@ export class TelegramIntegration {
     sessionManager: SessionManager
   ) {
     this.bot = new Bot(botToken);
+    this.botToken = botToken;
     this.router = router;
     this.toolRegistry = toolRegistry;
     this.sessionManager = sessionManager;
@@ -162,7 +179,8 @@ export class TelegramIntegration {
         `/dream — Consolider la mémoire (AutoDream)\n` +
         `/kairos on|off — Activer/désactiver les alertes proactives\n` +
         `/help — Cette aide\n\n` +
-        `Ou tapez simplement votre message pour parler à votre équipe.`,
+        `Ou tapez simplement votre message pour parler à votre équipe.\n` +
+        `Vous pouvez aussi *envoyer une photo* (visuel produit, capture d'écran, étiquette) : l'agent l'analyse.`,
         { parse_mode: 'Markdown' }
       );
     });
@@ -347,6 +365,45 @@ export class TelegramIntegration {
       );
     });
 
+    // ── Photos ────────────────────────────────────────────────────────────────
+    this.bot.on('message:photo', async (ctx: Context) => {
+      const sizes = ctx.message?.photo ?? [];
+      // Telegram sends several resolutions — take the largest one that fits
+      // the model's image budget.
+      const best = [...sizes]
+        .sort((a, b) => (a.file_size ?? a.width * a.height) - (b.file_size ?? b.width * b.height))
+        .filter((p) => (p.file_size ?? 0) <= MAX_IMAGE_BYTES)
+        .pop() ?? sizes[0];
+      if (!best) return;
+
+      console.log(`\n📱 Telegram [${ctx.from?.first_name}]: 🖼️ photo`);
+      const attachment = await this.downloadAttachment(best.file_id, 'image/jpeg', 'photo.jpg');
+      if (!attachment) {
+        await ctx.reply("Impossible de lire cette image (trop lourde ou format non supporté).");
+        return;
+      }
+      await this.handleIncomingImage(ctx, attachment, ctx.message?.caption ?? '');
+    });
+
+    // ── Images sent as files (document) ───────────────────────────────────────
+    this.bot.on('message:document', async (ctx: Context) => {
+      const doc = ctx.message?.document;
+      const mime = doc?.mime_type ?? '';
+      if (!doc || !mime.startsWith('image/')) return;
+
+      console.log(`\n📱 Telegram [${ctx.from?.first_name}]: 🖼️ document ${doc.file_name ?? ''}`);
+      if ((doc.file_size ?? 0) > MAX_IMAGE_BYTES) {
+        await ctx.reply(`Image trop lourde (max ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)} Mo).`);
+        return;
+      }
+      const attachment = await this.downloadAttachment(doc.file_id, mime, doc.file_name);
+      if (!attachment) {
+        await ctx.reply("Impossible de lire cette image (format non supporté : JPEG, PNG, GIF ou WebP).");
+        return;
+      }
+      await this.handleIncomingImage(ctx, attachment, ctx.message?.caption ?? '');
+    });
+
     // ── Text messages ─────────────────────────────────────────────────────────
     this.bot.on('message:text', async (ctx: Context) => {
       const message = ctx.message?.text;
@@ -360,9 +417,76 @@ export class TelegramIntegration {
     });
   }
 
+  // ─── Images ──────────────────────────────────────────────────────────────────
+
+  /** Download a Telegram file and turn it into a normalized attachment. */
+  private async downloadAttachment(
+    fileId: string,
+    mediaType: string,
+    name?: string
+  ): Promise<ChatAttachment | null> {
+    try {
+      const file = await this.bot.api.getFile(fileId);
+      if (!file.file_path) return null;
+      if ((file.file_size ?? 0) > MAX_IMAGE_BYTES) return null;
+
+      const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buffer = Buffer.from(await res.arrayBuffer());
+
+      return normalizeAttachment({
+        type: 'image',
+        mediaType,
+        data: buffer.toString('base64'),
+        name: name ?? file.file_path.split('/').pop(),
+      });
+    } catch (err) {
+      console.error('Telegram image download failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Route an image to the agent. Photos belonging to the same album
+   * (media_group_id) are buffered for a moment and sent together.
+   */
+  private async handleIncomingImage(ctx: Context, attachment: ChatAttachment, caption: string) {
+    const groupId = ctx.message?.media_group_id;
+
+    if (!groupId) {
+      await this.routeToAgent(ctx, caption, [attachment]);
+      return;
+    }
+
+    const existing = this.mediaGroups.get(groupId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      if (existing.attachments.length < MAX_ATTACHMENTS_PER_MESSAGE) {
+        existing.attachments.push(attachment);
+      }
+      if (!existing.caption && caption) existing.caption = caption;
+      existing.timer = setTimeout(() => this.flushMediaGroup(ctx, groupId), 1500);
+      return;
+    }
+
+    this.mediaGroups.set(groupId, {
+      attachments: [attachment],
+      caption,
+      timer: setTimeout(() => this.flushMediaGroup(ctx, groupId), 1500),
+    });
+  }
+
+  private async flushMediaGroup(ctx: Context, groupId: string) {
+    const group = this.mediaGroups.get(groupId);
+    if (!group) return;
+    this.mediaGroups.delete(groupId);
+    await this.routeToAgent(ctx, group.caption, group.attachments);
+  }
+
   // ─── Route to agent ──────────────────────────────────────────────────────────
 
-  private async routeToAgent(ctx: Context, message: string) {
+  private async routeToAgent(ctx: Context, message: string, attachments: ChatAttachment[] = []) {
     const chatId = String(ctx.chat?.id);
 
     try {
@@ -390,7 +514,10 @@ export class TelegramIntegration {
         return;
       }
 
-      const thinkingMsg = await ctx.reply('_Traitement en cours..._', { parse_mode: 'Markdown' });
+      const thinkingMsg = await ctx.reply(
+        attachments.length > 0 ? '_Analyse de l\'image en cours..._' : '_Traitement en cours..._',
+        { parse_mode: 'Markdown' }
+      );
 
       const store = await getStoreCredentials(storeId);
       const accessToken = decryptToken(store.accessToken);
@@ -406,17 +533,38 @@ export class TelegramIntegration {
         sessionManager: this.sessionManager,
       };
 
+      // Images arrive with no caption more often than not — give the agent a
+      // clear instruction so it actually analyses what it was sent.
+      const userMessage =
+        message.trim() ||
+        (attachments.length > 0
+          ? "Analyse cette image et dis-moi ce qui est pertinent pour la boutique."
+          : message);
+
       await saveChatMessage({
         storeId,
         agentId: agent.config.id,
         sender: 'user',
-        content: message,
-        metadata: { channel: 'telegram', chatId },
+        content: userMessage,
+        metadata: {
+          channel: 'telegram',
+          chatId,
+          ...(attachments.length > 0
+            ? {
+                attachments: attachments.map((a) => ({
+                  type: 'image',
+                  mediaType: a.mediaType,
+                  name: a.name,
+                  url: toDataUrl(a),
+                })),
+              }
+            : {}),
+        },
       });
 
       // Shared conversationId with the web app — same memory across channels
       const conversationId = `user-${storeId}`;
-      const response = await agent.chat(message, context, conversationId);
+      const response = await agent.chat(userMessage, context, conversationId, attachments);
 
       await saveChatMessage({
         storeId,
