@@ -22,7 +22,7 @@ import {
   executeApproval,
   findPendingApprovalForConversation,
 } from '../lib/approval-flow.js';
-import { redactConnectorHistory, safeArgumentSummary } from '../lib/connector-privacy.js';
+import { redactConnectorHistory, safeArgumentSummary, compactArgumentLog } from '../lib/connector-privacy.js';
 
 // ── Context window compaction (4 levels) ─────────────────────────────────────
 //
@@ -283,7 +283,9 @@ export class BaseAgent {
         for (const toolCall of response.toolCalls) {
           console.log(
             `  → Tool call: ${toolCall.name}`,
-            toolCall.name.includes('__') ? safeArgumentSummary(toolCall.input as Record<string, any>) : toolCall.input
+            toolCall.name.includes('__')
+              ? safeArgumentSummary(toolCall.input as Record<string, any>)
+              : compactArgumentLog(toolCall.input as Record<string, any>)
           );
 
           if (overCap) {

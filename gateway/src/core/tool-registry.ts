@@ -21,6 +21,11 @@ function isRefundOperation(toolName: string, params: any): boolean {
   }
 }
 
+// Per-tool registration logging is opt-in: connector catalogs hold hundreds of
+// tools and re-sync every 30s, which blows past Railway's 500 logs/sec cap and
+// causes real log lines to be dropped. Callers log an aggregate count instead.
+const VERBOSE_REGISTRY = process.env.DEBUG_TOOL_REGISTRY === 'true';
+
 export class ToolRegistry {
   private tools: Map<string, AgentTool> = new Map();
 
@@ -29,13 +34,17 @@ export class ToolRegistry {
       throw new Error(`Tool ${tool.name} is already registered`);
     }
     this.tools.set(tool.name, tool);
-    console.log(`✓ Registered tool: ${tool.name} (${tool.category})`);
+    if (VERBOSE_REGISTRY) console.log(`✓ Registered tool: ${tool.name} (${tool.category})`);
   }
 
   unregister(name: string): boolean {
     const existed = this.tools.delete(name);
-    if (existed) console.log(`− Unregistered tool: ${name}`);
+    if (existed && VERBOSE_REGISTRY) console.log(`− Unregistered tool: ${name}`);
     return existed;
+  }
+
+  size(): number {
+    return this.tools.size;
   }
 
   get(name: string): AgentTool | undefined {

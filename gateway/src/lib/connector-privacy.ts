@@ -7,6 +7,21 @@ export function safeArgumentSummary(params: Record<string, any> | undefined) {
   return { redacted: true, argumentKeys: keys, sensitiveKeys: keys.filter((key) => SECRET_KEY_RE.test(key)) };
 }
 
+/**
+ * One-line, length-capped rendering of a native tool's arguments.
+ * console.log of a raw object pretty-prints across many lines, which inflates
+ * the log rate (Railway drops above 500 lines/sec) and can spill payload text.
+ */
+export function compactArgumentLog(params: Record<string, any> | undefined, maxLength = 300): string {
+  let json: string;
+  try {
+    json = JSON.stringify(params ?? {});
+  } catch {
+    return '[unserializable arguments]';
+  }
+  return json.length > maxLength ? `${json.slice(0, maxLength)}… (${json.length} chars)` : json;
+}
+
 /** Remove raw MCP inputs/results before conversation history is persisted. */
 export function redactConnectorHistory(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
   const connectorToolIds = new Set<string>();

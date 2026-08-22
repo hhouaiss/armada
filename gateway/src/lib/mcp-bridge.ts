@@ -186,6 +186,7 @@ export async function syncIntegrations(): Promise<McpServerStatus[]> {
   const payload = await runnerFetch('/internal/sync', { method: 'POST', body: '{}' });
   connections = payload.connections || [];
 
+  const previous = new Set(registeredNames);
   for (const name of registeredNames) registryRef.unregister(name);
   registeredNames.clear();
 
@@ -198,6 +199,20 @@ export async function syncIntegrations(): Promise<McpServerStatus[]> {
       registeredNames.add(tool.exposedName);
     }
   }
+
+  // One summary line per sync, and only when the catalog actually changed —
+  // this runs every 30s and on every POST /api/mcp/sync.
+  const changed =
+    previous.size !== registeredNames.size ||
+    [...registeredNames].some((name) => !previous.has(name));
+  if (changed) {
+    const added = [...registeredNames].filter((n) => !previous.has(n)).length;
+    const removed = [...previous].filter((n) => !registeredNames.has(n)).length;
+    console.log(
+      `🔌 Connector catalog: ${registeredNames.size} tool(s) across ${connections.length} connection(s) (+${added}/-${removed})`
+    );
+  }
+
   return getMcpStatus();
 }
 
