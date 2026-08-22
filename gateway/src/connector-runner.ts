@@ -358,16 +358,33 @@ async function execute(input: any) {
     const text = (raw.content || []).filter((part: any) => part.type === 'text').map((part: any) => part.text).join('\n');
     let data: any = raw.content;
     if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+    // The provider's own wording is the only thing that distinguishes, say, a
+    // disabled API from a refused scope. Keep it verbatim (capped) next to our
+    // interpretation — without it a failure leaves no trace to diagnose from.
+    const rawError = raw.isError
+      ? (typeof data === 'string' ? data : JSON.stringify(data ?? null)).slice(0, 1000)
+      : null;
     const result = raw.isError
-      ? { success: false, error: explainConnectorError(row.connector.slug, typeof data === 'string' ? data.slice(0, 1000) : 'MCP tool failed', row.connector.endpoint) }
+      ? { success: false, error: explainConnectorError(row.connector.slug, rawError || 'MCP tool failed', row.connector.endpoint) }
       : { success: true, data };
+    if (rawError) {
+      console.warn(`  ⚠️ ${row.connector.slug}__${input.toolName} failed (connection ${row.id}): ${rawError}`);
+    }
     await prisma.$transaction([
-      prisma.appConnection.update({ where: { id: row.id }, data: { lastUsedAt: new Date(), lastHealthAt: new Date(), lastError: null } }),
+      prisma.appConnection.update({ where: { id: row.id }, data: {
+        lastUsedAt: new Date(), lastHealthAt: new Date(),
+        // A failed call must not clear the previous error.
+        lastError: rawError,
+      } }),
       prisma.connectorAuditEvent.create({ data: {
         storeId: row.storeId, connectionId: row.id, agentId: input.agentId,
         eventType: 'tool_execution', toolName: input.toolName,
         status: result.success ? 'completed' : 'failed', durationMs: Date.now() - started,
-        summary: { redacted: true, argumentKeys: Object.keys(input.args || {}), resultType: Array.isArray(data) ? 'array' : typeof data },
+        summary: {
+          redacted: true, argumentKeys: Object.keys(input.args || {}),
+          resultType: Array.isArray(data) ? 'array' : typeof data,
+          ...(rawError ? { providerError: rawError } : {}),
+        },
       } }),
     ]);
     return result;
