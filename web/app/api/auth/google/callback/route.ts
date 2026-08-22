@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/shopify';
 import { ensureCuratedConnectors } from '@/lib/connector-catalog';
 import { syncConnectorGateway } from '@/lib/connector-gateway';
+import { parseGrantedScopes } from '@/lib/oauth-scopes';
 
 function verify(state: string): { id: string; nonce: string } | null {
   try {
@@ -60,7 +61,13 @@ export async function GET(request: NextRequest) {
     client_id: process.env.GOOGLE_CLIENT_ID,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
   };
-  const grantedScopes = Array.isArray(state.scopes) ? state.scopes.map(String) : [];
+  const requestedScopes = Array.isArray(state.scopes) ? state.scopes.map(String) : [];
+  // Google's consent screen allows per-scope opt-out, so trust the token
+  // response rather than what we asked for.
+  const { granted: grantedScopes, missing: missingScopes, partial } = parseGrantedScopes(
+    tokens.scope,
+    requestedScopes
+  );
   const connection = await prisma.appConnection.create({ data: {
     userId: state.userId, storeId: state.storeId, connectorDefinitionId: definition.id,
     label: String(label).slice(0, 80), accountEmail: identity.email || null,
@@ -71,7 +78,8 @@ export async function GET(request: NextRequest) {
   if (agentIds.length) {
     await prisma.agentConnectionGrant.createMany({ data: agentIds.map((agentId) => ({ agentId, connectionId: connection.id })), skipDuplicates: true });
   }
-  await prisma.connectorAuditEvent.create({ data: { storeId: state.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: state.connectorSlug, scopes: grantedScopes } } });
+  await prisma.connectorAuditEvent.create({ data: { storeId: state.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: state.connectorSlug, scopes: grantedScopes, requestedScopes, missingScopes } } });
   await syncConnectorGateway().catch(() => null);
-  return back(`mcp=connected&slug=${encodeURIComponent(state.connectorSlug)}&connectionId=${connection.id}`);
+  const connected = `mcp=connected&slug=${encodeURIComponent(state.connectorSlug)}&connectionId=${connection.id}`;
+  return back(partial ? `${connected}&partial_scopes=${encodeURIComponent(missingScopes.join(','))}` : connected);
 }

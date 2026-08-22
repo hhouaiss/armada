@@ -3,6 +3,7 @@ import { exchangeAuthorization } from '@modelcontextprotocol/sdk/client/auth.js'
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/shopify';
 import { MCP_OAUTH_COOKIE, verifyPending } from '@/lib/mcp-oauth-state';
+import { parseGrantedScopes } from '@/lib/oauth-scopes';
 import crypto from 'node:crypto';
 import { syncConnectorGateway } from '@/lib/connector-gateway';
 
@@ -62,6 +63,13 @@ export async function GET(request: NextRequest) {
     };
 
     const credentials = { encrypted: encryptToken(JSON.stringify(config)) };
+    // pending.scope is what we asked for; (tokens as any).scope is what the
+    // authorization server actually issued.
+    const requestedScopes = pending.scope?.split(' ').filter(Boolean) || [];
+    const { granted: grantedScopes, missing: missingScopes } = parseGrantedScopes(
+      (tokens as any)?.scope,
+      requestedScopes
+    );
     const definition = await prisma.connectorDefinition.findUnique({ where: { slug: pending.slug } });
     const store = await prisma.store.findFirst({ where: { id: pending.storeId, userId: pending.userId } });
     if (!definition || !store) return back(`mcp=error&slug=${pending.slug}&reason=ownership`);
@@ -70,14 +78,14 @@ export async function GET(request: NextRequest) {
     if (duplicate) label = `${label} ${duplicate + 1}`;
     const connection = await prisma.appConnection.create({ data: {
       userId: pending.userId, storeId: pending.storeId, connectorDefinitionId: definition.id,
-      label, credentials, grantedScopes: pending.scope?.split(' ') || [], status: 'active', lastConnectedAt: new Date(),
+      label, credentials, grantedScopes, status: 'active', lastConnectedAt: new Date(),
     } });
     const oauthState = await prisma.connectorOAuthState.findUnique({ where: { id: pending.stateId } });
     const agentIds = Array.isArray(oauthState?.agentIds) ? oauthState.agentIds.map(String) : [];
     if (agentIds.length) {
       await prisma.agentConnectionGrant.createMany({ data: agentIds.map((agentId) => ({ agentId, connectionId: connection.id })), skipDuplicates: true });
     }
-    await prisma.connectorAuditEvent.create({ data: { storeId: pending.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: pending.slug } } });
+    await prisma.connectorAuditEvent.create({ data: { storeId: pending.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: pending.slug, scopes: grantedScopes, requestedScopes, missingScopes } } });
     await syncConnectorGateway().catch(() => null);
 
     // `mcp=connected` makes the Apps page trigger a gateway sync on load, so the
