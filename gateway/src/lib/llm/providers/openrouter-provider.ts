@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { LLMProvider, LLMResponse, LLMTool } from '../types.js';
+import { buildOpenAIUserContent } from '../../attachments.js';
 
 /**
  * OpenRouter Provider
@@ -75,13 +76,11 @@ export class OpenRouterProvider implements LLMProvider {
             });
           }
         } else {
-          // Plain user message
-          const text = textBlocks.length > 0
-            ? textBlocks.map((b: any) => b.text).join('\n')
-            : typeof msg.content === 'string'
-              ? msg.content
-              : '';
-          openAIMessages.push({ role: 'user', content: text });
+          // Plain user message — may carry image blocks (multimodal)
+          const plain = typeof msg.content === 'string'
+            ? msg.content
+            : buildOpenAIUserContent(content as any[]);
+          openAIMessages.push({ role: 'user', content: plain as any });
         }
       } else if (msg.role === 'assistant') {
         const content = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content as string }];

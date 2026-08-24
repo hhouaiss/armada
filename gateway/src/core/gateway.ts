@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import { nanoid } from 'nanoid';
+import { normalizeAttachments, toDataUrl } from '../lib/attachments.js';
 import {
   ClientMessageSchema,
   ServerMessage,
@@ -291,19 +292,38 @@ export class Gateway {
         sessionManager: this.sessionManager,
       };
 
-      // Save user message to database
+      // Normalize + validate any attached images before they reach the model
+      const attachments = normalizeAttachments(message.attachments);
+      const rejected = (message.attachments?.length ?? 0) - attachments.length;
+      if (rejected > 0) {
+        console.warn(`  ⚠️  ${rejected} pièce(s) jointe(s) ignorée(s) (format ou taille non supportés)`);
+      }
+
+      // Save user message to database — images are kept as data URLs in
+      // metadata so the web UI can re-render them from history.
       await saveChatMessage({
         storeId: message.storeId,
         agentId: message.agentId,
         sender: 'user',
         content: message.message,
+        metadata: attachments.length > 0
+          ? {
+              attachments: attachments.map((a) => ({
+                type: 'image',
+                mediaType: a.mediaType,
+                name: a.name,
+                url: toDataUrl(a),
+              })),
+            }
+          : undefined,
       });
 
       // Call agent's chat method
       const response = await agent.chat(
         message.message,
         context,
-        message.conversationId || 'default'
+        message.conversationId || 'default',
+        attachments
       );
 
       // Save agent response to database

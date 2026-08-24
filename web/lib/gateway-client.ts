@@ -168,7 +168,8 @@ export class GatewayClient {
     storeId: string,
     agentId: string,
     message: string,
-    conversationId?: string
+    conversationId?: string,
+    attachments?: Array<{ type: 'image'; mediaType: string; data: string; name?: string }>
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -204,6 +205,7 @@ export class GatewayClient {
         agentId,
         message,
         conversationId,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
 
       console.log(`→ Chat message sent to ${agentId}: "${message}"`);

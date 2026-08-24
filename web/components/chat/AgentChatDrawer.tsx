@@ -11,6 +11,15 @@ import { useActiveStore } from '@/lib/hooks/useActiveStore';
 import { useChatDrawer } from '@/contexts/ChatDrawerContext';
 import Link from 'next/link';
 import { AGENT_COLORS } from '@/lib/livrables';
+import {
+  ChatImageAttachment,
+  StoredAttachment,
+  attachmentsFromMetadata,
+  fileToAttachment,
+  imageFilesFrom,
+  MAX_ATTACHMENTS,
+} from '@/lib/chat-attachments';
+import { AttachButton, AttachmentTray, MessageImages } from '@/components/chat/ChatAttachments';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +29,8 @@ interface Message {
   content: string;
   timestamp: Date;
   status?: 'sending' | 'sent' | 'error';
+  /** Images sent with this message (live send or replayed from history). */
+  attachments?: Array<ChatImageAttachment | StoredAttachment>;
 }
 
 interface LivrableRef { id: string; title: string }
@@ -84,6 +95,9 @@ export function AgentChatDrawer() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [attachments, setAttachments] = useState<ChatImageAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   // Stable per-agent conversation thread — shared with Mission Control and chat page
   const [conversationId, setConversationId] = useState<string>(() =>
     agentId ? `agent-${agentId}` : `conv-${Date.now()}`
@@ -126,6 +140,7 @@ export function AgentChatDrawer() {
             content: m.content,
             timestamp: new Date(m.createdAt),
             status: 'sent',
+            attachments: attachmentsFromMetadata(m.metadata),
           })));
         } else {
           setMessages([{ id: 'welcome', sender: 'agent', content: greetingRef.current, timestamp: new Date(), status: 'sent' }]);
@@ -161,6 +176,7 @@ export function AgentChatDrawer() {
     setConversationId(newId);
     setMessages([{ id: 'welcome', sender: 'agent', content: greetingRef.current, timestamp: new Date(), status: 'sent' }]);
     setInput('');
+    setAttachments([]);
   }, [conversationId]);
 
   // Return to the agent's main persistent thread
@@ -169,26 +185,66 @@ export function AgentChatDrawer() {
     setConversations([]);
     setConversationId(`agent-${agentId}`);
     setInput('');
+    setAttachments([]);
   }, [agentId]);
+
+  // ── Image attachments ────────────────────────────────────────────────────
+  const addFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setAttachError(null);
+    for (const file of files) {
+      try {
+        const attachment = await fileToAttachment(file);
+        setAttachments(prev => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, attachment]));
+      } catch (err) {
+        setAttachError(err instanceof Error ? err.message : 'Image illisible.');
+      }
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const files = imageFilesFrom(e.clipboardData?.items ?? null);
+    if (files.length > 0) {
+      e.preventDefault();
+      addFiles(files);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    addFiles(imageFilesFrom(e.dataTransfer?.files ?? null));
+  };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || !agentId) return;
+    if ((!input.trim() && attachments.length === 0) || isLoading || !agentId) return;
+
+    const outgoing = attachments;
+    const text = input.trim() || (outgoing.length > 0 ? 'Analyse cette image.' : input);
 
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       sender: 'user',
-      content: input,
+      content: text,
       timestamp: new Date(),
       status: 'sending',
+      attachments: outgoing,
     };
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
+    setAttachments([]);
+    setAttachError(null);
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(agentId, input, conversationId);
+      const response = await sendChatMessage(
+        agentId,
+        text,
+        conversationId,
+        outgoing.map(({ type, mediaType, data, name }) => ({ type, mediaType, data, name }))
+      );
       setMessages(prev => [
         ...prev.map(m => m.id === userMsg.id ? { ...m, status: 'sent' as const } : m),
         { id: `agent-${Date.now()}`, sender: 'agent', content: response, timestamp: new Date(), status: 'sent' },
@@ -332,6 +388,9 @@ export function AgentChatDrawer() {
                         : { backgroundColor: 'var(--armada-surface)', color: 'var(--armada-text)' }
                     }
                   >
+                    {message.attachments && message.attachments.length > 0 && (
+                      <MessageImages attachments={message.attachments} />
+                    )}
                     {displayContent}
                     {livrableRef && <LivrableCard livrableRef={livrableRef} agentType={agentType} />}
                   </div>
@@ -366,14 +425,30 @@ export function AgentChatDrawer() {
 
         {/* ── Input ── */}
         <div
-          className="border-t border-[var(--armada-accent)]/50 p-3 shrink-0"
+          className={`border-t p-3 shrink-0 transition-colors ${
+            isDragging
+              ? 'border-[var(--armada-primary)] bg-[var(--armada-primary)]/5'
+              : 'border-[var(--armada-accent)]/50'
+          }`}
           style={{ backgroundColor: 'var(--armada-surface)' }}
+          onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
         >
+          <AttachmentTray
+            attachments={attachments}
+            onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))}
+          />
+          {attachError && (
+            <p className="text-[10px] font-mono text-red-400 mb-2">{attachError}</p>
+          )}
           <form onSubmit={handleSend} className="flex gap-2 items-center">
+            <AttachButton onFiles={addFiles} disabled={!isConnected || isLoading} count={attachments.length} />
             <input
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
+              onPaste={handlePaste}
               placeholder={isConnected ? `Briefer ${personality.name}…` : 'Connexion en cours…'}
               disabled={!isConnected || isLoading}
               className="flex-1 rounded-full border border-[var(--armada-accent)]/60 px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--armada-primary)]/50 focus:ring-2 focus:ring-[var(--armada-primary)]/10 transition-colors disabled:opacity-40"
@@ -381,7 +456,7 @@ export function AgentChatDrawer() {
             />
             <button
               type="submit"
-              disabled={!isConnected || isLoading || !input.trim()}
+              disabled={!isConnected || isLoading || (!input.trim() && attachments.length === 0)}
               className="flex items-center justify-center w-9 h-9 rounded-full text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:opacity-90 shrink-0"
               style={{ backgroundColor: 'var(--armada-primary)' }}
             >

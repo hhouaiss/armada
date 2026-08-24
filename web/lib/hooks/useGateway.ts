@@ -74,7 +74,12 @@ export function useGateway() {
   }, []);
 
   const sendChatMessage = useCallback(
-    async (agentId: string, message: string, conversationId?: string) => {
+    async (
+      agentId: string,
+      message: string,
+      conversationId?: string,
+      attachments?: Array<{ type: 'image'; mediaType: string; data: string; name?: string }>
+    ) => {
       if (!activeStoreId) {
         throw new Error('No active store');
       }
@@ -86,7 +91,8 @@ export function useGateway() {
         activeStoreId,
         agentId,
         message,
-        conversationId
+        conversationId,
+        attachments
       );
     },
     [activeStoreId, isConnected]
