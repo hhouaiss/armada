@@ -31,7 +31,7 @@ const PROVIDERS = {
     name: 'OpenRouter (Open Source)',
     icon: '🌐',
     models: [
-      { id: 'stealth/ox-alpha', name: 'Ox Alpha', tier: 'Premium', pricing: 'Free (stealth preview)', description: 'Modèle stealth avec 1M de contexte — gratuit pendant la préversion, les prompts peuvent être partagés avec le fournisseur' },
+      { id: 'z-ai/glm-5.3-flash', name: 'GLM 5.3 Flash', tier: 'Fast', pricing: '$0.075/$0.25 per 1M tokens', description: 'Z.AI — 1,3M de contexte, très rapide et ultra économique, idéal pour les tâches à haut volume' },
       { id: 'z-ai/glm-5.2', name: 'GLM-5.2', tier: 'Premium', pricing: '$0.60/$2 per 1M tokens', description: 'Z.AI flagship — strong agentic, reasoning and coding performance at open source cost' },
       { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'Premium', pricing: '$0.50/$1.50 per 1M tokens', description: 'Most capable DeepSeek model — strong reasoning and coding, at open source cost' },
       { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', tier: 'Fast', pricing: '$0.07/$0.28 per 1M tokens', description: 'Ultra-low cost variant — ideal for high-volume tasks and quick responses' },
