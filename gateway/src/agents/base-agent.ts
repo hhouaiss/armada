@@ -689,7 +689,7 @@ You are an AI agent for a Shopify store, powered by the StoreTeam platform.`;
     const memoryEngine = new MemoryEngine(this.config.storeId);
     const [memorySummary, inboxSection] = await Promise.all([
       memoryEngine.buildIndexSummary(),
-      memoryEngine.buildInboxSection(this.config.id),
+      memoryEngine.buildInboxSection(this.config.id, conversationId),
     ]);
     const memorySection = memorySummary ? `\n\n${memorySummary}` : '';
 

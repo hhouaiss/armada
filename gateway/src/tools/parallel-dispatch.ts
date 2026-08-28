@@ -17,6 +17,9 @@ export const parallelDispatchTool: AgentTool = {
     'Requires at least 2 dispatches. For a single specialist, use dispatch_to_specialist instead. ' +
     'Use any active agent name (e.g. "Zoe", "Marcus", "Olivia") — the squad is dynamic.',
   category: 'orchestration',
+  // Runs a full nested agentic loop: a specialist producing a long deliverable
+  // (full HTML email, report) takes minutes, well past the default 60s.
+  timeoutMs: 10 * 60_000,
   inputSchema: {
     type: 'object',
     properties: {

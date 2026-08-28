@@ -56,6 +56,13 @@ export interface AgentTool {
   description: string;
   category: string;
   requiresApproval?: boolean;
+  /**
+   * Max execution time before the registry aborts the call.
+   * Defaults to the registry's 60s. Orchestration tools that run a nested
+   * agentic loop (dispatch) need much more — a specialist writing a long
+   * deliverable routinely takes several minutes.
+   */
+  timeoutMs?: number;
   /** Contextual policy used by tenant-scoped MCP tools. */
   getPolicy?(params: any, context: ToolContext): Promise<'blocked' | 'automatic' | 'approval'>;
   getAuditMetadata?(params: any, context: ToolContext): Promise<ToolResult['audit'] | undefined>;

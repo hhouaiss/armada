@@ -126,7 +126,7 @@ export default function ChatPage() {
   const params = useParams();
   const agentId = params?.agentId as string;
   const { activeStoreId, activeStore } = useActiveStore();
-  const { isConnected, sendChatMessage } = useGateway();
+  const { isConnected, sendChatMessage, client } = useGateway();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -176,6 +176,24 @@ export default function ChatPage() {
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStoreId, agentId]); // intentionally omitting personality.greeting — see greetingRef above
+
+  // Async dispatches finish long after the request that started them, so the
+  // gateway pushes the specialist's deliverable over the WebSocket instead of
+  // returning it inline. Append it when it arrives for this agent.
+  useEffect(() => {
+    const onAgentMessage = (msg: any) => {
+      if (msg.agentId !== agentId) return;
+      setMessages(prev => [...prev, {
+        id: `push-${Date.now()}`,
+        sender: 'agent',
+        content: msg.message,
+        timestamp: new Date(),
+        status: 'sent',
+      }]);
+    };
+    client.on('agent_message', onAgentMessage);
+    return () => client.off('agent_message', onAgentMessage);
+  }, [client, agentId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

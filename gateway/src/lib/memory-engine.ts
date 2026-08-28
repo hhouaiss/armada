@@ -14,7 +14,11 @@ export interface InboxTask {
   from: string;          // e.g. "Major"
   scheduledDate?: string; // YYYY-MM-DD if agent was told to do it on a specific date
   assignedAt: string;    // ISO timestamp
-  status: 'pending' | 'done';
+  // 'in_progress' = an async dispatch is running the task right now. It is not
+  // shown as pending in the prompt so the agent doesn't restart its own work.
+  status: 'pending' | 'in_progress' | 'done' | 'failed';
+  completedAt?: string;  // ISO timestamp, set when the task leaves in_progress
+  result?: string;       // deliverable (or error message) from an async dispatch
 }
 
 export interface MemoryIndex {
@@ -30,6 +34,22 @@ const EMPTY_INDEX: MemoryIndex = {
   keyFacts: [],
   topics: {},
 };
+
+/**
+ * Async dispatches currently executing in this process, keyed by the
+ * conversation running them. The agent doing the work must not be told it
+ * "already has this running in the background" — that reads as an instruction
+ * to stop. Every other conversation still sees the task as in progress.
+ */
+const runningByConversation = new Map<string, string>(); // conversationId → taskId
+
+export function markTaskRunning(conversationId: string, taskId: string): void {
+  runningByConversation.set(conversationId, taskId);
+}
+
+export function clearTaskRunning(conversationId: string): void {
+  runningByConversation.delete(conversationId);
+}
 
 export class MemoryEngine {
   constructor(private storeId: string) {}
@@ -197,46 +217,132 @@ export class MemoryEngine {
     });
   }
 
-  async addToInbox(agentId: string, task: Omit<InboxTask, 'id' | 'assignedAt' | 'status'>): Promise<string> {
+  async addToInbox(
+    agentId: string,
+    task: Omit<InboxTask, 'id' | 'assignedAt' | 'status'> & { status?: InboxTask['status'] }
+  ): Promise<string> {
     const tasks = await this.loadInbox(agentId);
     const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    tasks.push({ ...task, id, assignedAt: new Date().toISOString(), status: 'pending' });
+    tasks.push({
+      ...task,
+      id,
+      assignedAt: new Date().toISOString(),
+      status: task.status ?? 'pending',
+    });
     await this.saveInbox(agentId, tasks);
     return id;
   }
 
-  async completeInboxTask(agentId: string, taskId: string): Promise<boolean> {
+  /**
+   * Marks a task finished. `result` carries the deliverable of an async
+   * dispatch (or the error message when status is 'failed') so it survives
+   * past the conversation that produced it.
+   */
+  async completeInboxTask(
+    agentId: string,
+    taskId: string,
+    opts: { result?: string; status?: 'done' | 'failed' } = {}
+  ): Promise<boolean> {
     const tasks = await this.loadInbox(agentId);
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return false;
-    task.status = 'done';
-    // Keep only recent done tasks (last 20) + all pending ones
-    const pending = tasks.filter((t) => t.status === 'pending');
-    const recent = tasks.filter((t) => t.status === 'done').slice(-20);
-    await this.saveInbox(agentId, [...pending, ...recent]);
+    task.status = opts.status ?? 'done';
+    task.completedAt = new Date().toISOString();
+    if (opts.result !== undefined) task.result = opts.result;
+    // Keep every unfinished task + the 20 most recent finished ones
+    const open = tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
+    const recent = tasks.filter((t) => t.status === 'done' || t.status === 'failed').slice(-20);
+    await this.saveInbox(agentId, [...open, ...recent]);
     return true;
+  }
+
+  /** The task a running async dispatch is working on, if any. */
+  async findInboxTask(agentId: string, taskId: string): Promise<InboxTask | null> {
+    const tasks = await this.loadInbox(agentId);
+    return tasks.find((t) => t.id === taskId) ?? null;
   }
 
   /**
    * Returns a compact inbox section for the system prompt.
-   * Only shows pending tasks. Returns '' if inbox is empty.
+   *
+   * Shows three blocks so the agent knows where they stand, not just what is
+   * queued: what is running right now (async dispatch), what is still to do,
+   * and what was just delivered. Without the last two the agent re-announces
+   * or redoes work it has already finished.
    */
-  async buildInboxSection(agentId: string): Promise<string> {
+  async buildInboxSection(agentId: string, conversationId?: string): Promise<string> {
     const tasks = await this.loadInbox(agentId);
+    if (tasks.length === 0) return '';
+
+    // The task this very conversation was spawned to execute is not "context" —
+    // it's the current job, already in the agent's instructions.
+    const selfTaskId = conversationId ? runningByConversation.get(conversationId) : undefined;
+    const inProgress = tasks.filter((t) => t.status === 'in_progress' && t.id !== selfTaskId);
     const pending = tasks.filter((t) => t.status === 'pending');
-    if (pending.length === 0) return '';
+    const finished = tasks
+      .filter((t) => t.status === 'done' || t.status === 'failed')
+      .slice(-5)
+      .reverse();
+
+    if (inProgress.length === 0 && pending.length === 0 && finished.length === 0) return '';
 
     const today = new Date().toISOString().split('T')[0];
-    const lines: string[] = ['\n\n## TÂCHES EN ATTENTE (INBOX)'];
-    lines.push('Ces tâches t\'ont été assignées par le Major ou un autre agent. Exécute-les au bon moment et appelle `inbox_complete` quand c\'est fait.\n');
+    const lines: string[] = ['\n\n## TON INBOX'];
 
-    for (const t of pending) {
-      const dateLabel = t.scheduledDate
-        ? (t.scheduledDate === today ? ' ⚡ AUJOURD\'HUI' : ` 📅 ${t.scheduledDate}`)
-        : '';
-      lines.push(`- [id: ${t.id}]${dateLabel} ${t.task} _(assigné par ${t.from} le ${t.assignedAt.split('T')[0]})_`);
+    if (inProgress.length > 0) {
+      lines.push('\n### 🔄 EN COURS');
+      lines.push(
+        "Tu travailles déjà sur ces tâches en arrière-plan. Ne les recommence pas et ne les réannonce pas — " +
+          "si on t'en parle, dis simplement où tu en es.\n"
+      );
+      for (const t of inProgress) {
+        lines.push(`- [id: ${t.id}] ${t.task} _(démarré le ${formatStamp(t.assignedAt)}, assigné par ${t.from})_`);
+      }
+    }
+
+    if (pending.length > 0) {
+      lines.push('\n### 📋 À FAIRE');
+      lines.push(
+        "Ces tâches t'ont été assignées par le Major ou un autre agent. Exécute-les au bon moment et appelle " +
+          '`inbox_complete` quand c\'est fait.\n'
+      );
+      for (const t of pending) {
+        const dateLabel = t.scheduledDate
+          ? t.scheduledDate === today
+            ? " ⚡ AUJOURD'HUI"
+            : ` 📅 ${t.scheduledDate}`
+          : '';
+        lines.push(`- [id: ${t.id}]${dateLabel} ${t.task} _(assigné par ${t.from} le ${t.assignedAt.split('T')[0]})_`);
+      }
+    }
+
+    if (finished.length > 0) {
+      lines.push('\n### ✅ TERMINÉ RÉCEMMENT');
+      lines.push(
+        "Déjà livré. Sers-t'en comme contexte (le marchand a reçu ces résultats) plutôt que de refaire le travail.\n"
+      );
+      for (const t of finished) {
+        const icon = t.status === 'failed' ? '⚠️ échec' : 'livré';
+        const stamp = t.completedAt ? formatStamp(t.completedAt) : t.assignedAt.split('T')[0];
+        const excerpt = t.result ? ` → ${summarise(t.result)}` : '';
+        lines.push(`- ${t.task} _(${icon} le ${stamp})_${excerpt}`);
+      }
     }
 
     return lines.join('\n');
   }
+}
+
+// ─── Inbox formatting helpers ─────────────────────────────────────────────────
+
+/** "2026-08-28 14:32" — date alone is too coarse for same-day async tasks. */
+function formatStamp(iso: string): string {
+  const [date, time] = iso.split('T');
+  return time ? `${date} ${time.slice(0, 5)}` : date;
+}
+
+/** One-line gist of a deliverable — the full text would flood the prompt. */
+function summarise(result: string): string {
+  const flat = result.replace(/\s+/g, ' ').trim();
+  return flat.length <= 160 ? flat : `${flat.slice(0, 160)}…`;
 }

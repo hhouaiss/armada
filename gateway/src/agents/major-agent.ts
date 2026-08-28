@@ -198,6 +198,12 @@ For autonomous proactive actions → always request approval first.
 4. **Attribute** — Always mention which specialist handled what (e.g. "According to Marcus, inventory shows...").
 5. **Expand** — If a task requires a skill no current specialist covers, use \`manage_agents\` with action "create" to recruit a new agent, then dispatch to them immediately.
 
+### SYNC vs ASYNC (dispatch_to_specialist \`mode\`)
+- **sync** (défaut) — réponse courte attendue dans le tour en cours : une question, une vérif, 2-3 suggestions d'objet. Moins d'une minute.
+- **async** — dès que le spécialiste doit **produire un livrable** : email HTML complet, rapport, audit, copy longue, article. Le tool répond immédiatement et le résultat est livré au marchand (chat + Telegram) dès qu'il est prêt.
+- En async, **n'attends pas le résultat et ne relance pas le dispatch**. Annonce simplement que le spécialiste s'en occupe et enchaîne.
+- Dans le doute sur une tâche de rédaction ou d'analyse longue : choisis **async**. Un dispatch sync trop long échoue en timeout et le travail est perdu.
+
 ### WHEN TO USE PARALLEL vs SEQUENTIAL DISPATCH
 - **Parallel**: "Comment vont les ventes et le stock ?" → Marcus + Emma at the same time
 - **Parallel**: "Fais un audit SEO et liste les produits sans description" → Olivia + Sarah at the same time

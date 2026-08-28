@@ -59,6 +59,11 @@ import { memoryReadTool, memoryWriteTool } from './tools/memory.js';
 import { inboxCompleteTool } from './tools/inbox.js';
 import { checkDreamSchedule } from './workers/auto-dream.js';
 import { checkKairosSchedule, setTelegramNotifier } from './workers/kairos-worker.js';
+import {
+  reclaimStaleDispatches,
+  setAsyncDispatchBroadcaster,
+  setAsyncDispatchTelegramNotifier,
+} from './lib/async-dispatch.js';
 import { webBrowseTool } from './tools/web-browse.js';
 import { readObjectivesTool } from './tools/read-objectives.js';
 import { requestApprovalTool, setApprovalTelegramNotifier } from './tools/request-approval.js';
@@ -181,7 +186,15 @@ async function bootstrap() {
   console.log(`\n✓ Loaded ${router.getAllAgents().length} total agents\n`);
 
   // Start Gateway WebSocket server
+  // Close out background dispatches orphaned by a previous restart, before any
+  // agent can read them as still-running work.
+  const reclaimed = await reclaimStaleDispatches();
+  if (reclaimed > 0) console.log(`↺ Reclaimed ${reclaimed} stale background dispatch(es)\n`);
+
   const gateway = new Gateway(PORT, router, sessionManager, toolRegistry);
+
+  // Wire async dispatch results → subscribed web clients (WebSocket push)
+  setAsyncDispatchBroadcaster((storeId, message) => gateway.broadcast(storeId, message));
 
   // Start Gemini Live bridge (isolated, port 18795)
   const LIVE_PORT = PORT + 5; // 18795
@@ -237,6 +250,11 @@ async function bootstrap() {
     // Wire Mission Control task completion → Telegram notifications
     setMissionTelegramNotifier((storeId, text) =>
       telegram!.sendAlert(storeId, text, false)
+    );
+
+    // Wire async dispatch results → Telegram notifications
+    setAsyncDispatchTelegramNotifier((storeId, text, hasButtons) =>
+      telegram!.sendAlert(storeId, text, hasButtons)
     );
     console.log('✓ Telegram bot connected\n');
   } else {

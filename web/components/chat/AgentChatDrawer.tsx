@@ -90,7 +90,7 @@ function LivrableCard({ livrableRef, agentType }: { livrableRef: LivrableRef; ag
 export function AgentChatDrawer() {
   const { isOpen, agentId, closeChat } = useChatDrawer();
   const { activeStoreId } = useActiveStore();
-  const { isConnected, sendChatMessage } = useGateway();
+  const { isConnected, sendChatMessage, client } = useGateway();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -151,6 +151,24 @@ export function AgentChatDrawer() {
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStoreId, agentId, conversationId]);
+
+  // Async dispatch results arrive over the WebSocket long after the request
+  // that started them — append them when they land for this agent.
+  useEffect(() => {
+    if (!agentId) return;
+    const onAgentMessage = (msg: any) => {
+      if (msg.agentId !== agentId) return;
+      setMessages(prev => [...prev, {
+        id: `push-${Date.now()}`,
+        sender: 'agent',
+        content: msg.message,
+        timestamp: new Date(),
+        status: 'sent',
+      }]);
+    };
+    client.on('agent_message', onAgentMessage);
+    return () => client.off('agent_message', onAgentMessage);
+  }, [client, agentId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

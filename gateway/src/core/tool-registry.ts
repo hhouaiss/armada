@@ -3,6 +3,7 @@ import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 // A tool that hangs (network call without timeout, API stall) would otherwise
 // freeze the whole agentic loop — and with it the chat and the approval executor.
 const TOOL_TIMEOUT_MS = 60_000;
+// Tools may opt into a longer budget via `timeoutMs` (see AgentTool).
 
 // Refunds are strictly off-limits for agents, with no approval escape hatch —
 // the merchant handles them directly in the Shopify dashboard.
@@ -113,15 +114,16 @@ export class ToolRegistry {
 
     let timeoutHandle: NodeJS.Timeout | undefined;
     try {
+      const timeoutMs = tool.timeoutMs ?? TOOL_TIMEOUT_MS;
       console.log(`→ Executing tool: ${toolName}`);
       const timeout = new Promise<ToolResult>((resolve) => {
         timeoutHandle = setTimeout(
           () =>
             resolve({
               success: false,
-              error: `Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS / 1000}s`,
+              error: `Tool ${toolName} timed out after ${timeoutMs / 1000}s`,
             }),
-          TOOL_TIMEOUT_MS
+          timeoutMs
         );
       });
       const result = await Promise.race([tool.execute(params, context), timeout]);
