@@ -359,6 +359,7 @@ model ConnectorOAuthState {
   userId        String
   storeId       String
   connectorSlug String
+  connectionId  String?
   label         String
   scopes        Json      @default("[]")
   agentIds      Json      @default("[]")

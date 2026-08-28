@@ -34,12 +34,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const slug = request.nextUrl.searchParams.get('slug');
-  const storeId = request.nextUrl.searchParams.get('storeId') || '';
-  if (!slug) return back('mcp=error&reason=missing_slug');
   await ensureCuratedConnectors(prisma);
+
+  // Reconnect path: the connection itself decides connector, store and label, so
+  // a re-authorization refreshes the existing account instead of duplicating it.
+  const reconnectId = request.nextUrl.searchParams.get('connectionId');
+  const existing = reconnectId
+    ? await prisma.appConnection.findFirst({ where: { id: reconnectId, userId: user.id, store: { userId: user.id } }, include: { connector: true } })
+    : null;
+  if (reconnectId && !existing) return back('mcp=error&reason=connection_not_found');
+
+  const slug = existing?.connector.slug ?? request.nextUrl.searchParams.get('slug');
+  const storeId = existing?.storeId ?? (request.nextUrl.searchParams.get('storeId') || '');
+  if (!slug) return back('mcp=error&reason=missing_slug');
   const store = await prisma.store.findFirst({ where: { id: storeId, userId: user.id }, select: { id: true } });
-  const definition = await prisma.connectorDefinition.findFirst({ where: { slug, isActive: true } });
+  const definition = existing?.connector ?? await prisma.connectorDefinition.findFirst({ where: { slug, isActive: true } });
   if (!store || !definition) return back('mcp=error&reason=invalid_connector_or_store');
   const serverUrl = definition.endpoint ?? request.nextUrl.searchParams.get('url') ?? undefined;
   if (!serverUrl) return back(`mcp=error&reason=unknown_server&slug=${slug}`);
@@ -84,7 +93,8 @@ export async function GET(request: NextRequest) {
     const validAgents = await prisma.agent.findMany({ where: { id: { in: requestedAgentIds }, storeId }, select: { id: true } });
     const oauthState = await prisma.connectorOAuthState.create({ data: {
       nonceHash: crypto.createHash('sha256').update(nonce).digest('hex'), userId: user.id,
-      storeId, connectorSlug: slug, label: (request.nextUrl.searchParams.get('label') || definition.name).slice(0, 80),
+      storeId, connectorSlug: slug, connectionId: existing?.id ?? null,
+      label: (existing?.label || request.nextUrl.searchParams.get('label') || definition.name).slice(0, 80),
       scopes: scope ? scope.split(' ') : [], agentIds: validAgents.map((agent) => agent.id),
       expiresAt: new Date(Date.now() + 15 * 60_000),
     } });
@@ -104,6 +114,7 @@ export async function GET(request: NextRequest) {
         userId: user.id,
         storeId,
         label: oauthState.label,
+        connectionId: existing?.id,
         stateId: oauthState.id,
         nonce,
         ts: Date.now(),

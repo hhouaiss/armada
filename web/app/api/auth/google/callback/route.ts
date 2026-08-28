@@ -50,9 +50,15 @@ export async function GET(request: NextRequest) {
   await ensureCuratedConnectors(prisma);
   const definition = await prisma.connectorDefinition.findUnique({ where: { slug: state.connectorSlug } });
   if (!definition) return back('mcp=error&reason=connector_not_found');
+  const existing = state.connectionId
+    ? await prisma.appConnection.findFirst({ where: { id: state.connectionId, userId: state.userId, storeId: state.storeId } })
+    : null;
+  if (state.connectionId && !existing) return back('mcp=error&reason=connection_not_found');
   let label = state.label || identity.email || definition.name;
-  const duplicate = await prisma.appConnection.count({ where: { storeId: state.storeId, connectorDefinitionId: definition.id, label } });
-  if (duplicate) label = `${label} ${duplicate + 1}`;
+  if (!existing) {
+    const duplicate = await prisma.appConnection.count({ where: { storeId: state.storeId, connectorDefinitionId: definition.id, label } });
+    if (duplicate) label = `${label} ${duplicate + 1}`;
+  }
   const credentials = {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
@@ -68,18 +74,26 @@ export async function GET(request: NextRequest) {
     tokens.scope,
     requestedScopes
   );
-  const connection = await prisma.appConnection.create({ data: {
-    userId: state.userId, storeId: state.storeId, connectorDefinitionId: definition.id,
-    label: String(label).slice(0, 80), accountEmail: identity.email || null,
-    credentials: { encrypted: encryptToken(JSON.stringify(credentials)) }, grantedScopes,
-    status: 'active', lastConnectedAt: new Date(),
-  } });
+  // Reconnect keeps the existing label, agent grants and tool policies; only the
+  // credentials and the granted scopes are refreshed.
+  const connection = existing
+    ? await prisma.appConnection.update({ where: { id: existing.id }, data: {
+        accountEmail: identity.email || existing.accountEmail,
+        credentials: { encrypted: encryptToken(JSON.stringify(credentials)) }, grantedScopes,
+        status: 'active', lastConnectedAt: new Date(), lastError: null,
+      } })
+    : await prisma.appConnection.create({ data: {
+        userId: state.userId, storeId: state.storeId, connectorDefinitionId: definition.id,
+        label: String(label).slice(0, 80), accountEmail: identity.email || null,
+        credentials: { encrypted: encryptToken(JSON.stringify(credentials)) }, grantedScopes,
+        status: 'active', lastConnectedAt: new Date(),
+      } });
   const agentIds = Array.isArray(state.agentIds) ? state.agentIds.map(String) : [];
-  if (agentIds.length) {
+  if (agentIds.length && !existing) {
     await prisma.agentConnectionGrant.createMany({ data: agentIds.map((agentId) => ({ agentId, connectionId: connection.id })), skipDuplicates: true });
   }
-  await prisma.connectorAuditEvent.create({ data: { storeId: state.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: state.connectorSlug, scopes: grantedScopes, requestedScopes, missingScopes } } });
+  await prisma.connectorAuditEvent.create({ data: { storeId: state.storeId, connectionId: connection.id, eventType: existing ? 'oauth_reconnected' : 'oauth_connected', status: 'completed', summary: { connector: state.connectorSlug, scopes: grantedScopes, requestedScopes, missingScopes } } });
   await syncConnectorGateway().catch(() => null);
-  const connected = `mcp=connected&slug=${encodeURIComponent(state.connectorSlug)}&connectionId=${connection.id}`;
+  const connected = `mcp=${existing ? 'reconnected' : 'connected'}&slug=${encodeURIComponent(state.connectorSlug)}&connectionId=${connection.id}`;
   return back(partial ? `${connected}&partial_scopes=${encodeURIComponent(missingScopes.join(','))}` : connected);
 }

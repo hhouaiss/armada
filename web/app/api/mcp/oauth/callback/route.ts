@@ -76,24 +76,38 @@ export async function GET(request: NextRequest) {
     const definition = await prisma.connectorDefinition.findUnique({ where: { slug: pending.slug } });
     const store = await prisma.store.findFirst({ where: { id: pending.storeId, userId: pending.userId } });
     if (!definition || !store) return back(`mcp=error&slug=${pending.slug}&reason=ownership`);
-    let label = pending.label;
-    const duplicate = await prisma.appConnection.count({ where: { storeId: pending.storeId, connectorDefinitionId: definition.id, label } });
-    if (duplicate) label = `${label} ${duplicate + 1}`;
-    const connection = await prisma.appConnection.create({ data: {
-      userId: pending.userId, storeId: pending.storeId, connectorDefinitionId: definition.id,
-      label, credentials, grantedScopes, status: 'active', lastConnectedAt: new Date(),
-    } });
+    // Reconnect: refresh the credentials of the existing account, keeping its
+    // label, agent grants and tool policies untouched.
+    const existing = pending.connectionId
+      ? await prisma.appConnection.findFirst({ where: { id: pending.connectionId, userId: pending.userId, storeId: pending.storeId } })
+      : null;
+    if (pending.connectionId && !existing) return back(`mcp=error&slug=${pending.slug}&reason=connection_not_found`);
+
+    let connection;
+    if (existing) {
+      connection = await prisma.appConnection.update({ where: { id: existing.id }, data: {
+        credentials, grantedScopes, status: 'active', lastConnectedAt: new Date(), lastError: null,
+      } });
+    } else {
+      let label = pending.label;
+      const duplicate = await prisma.appConnection.count({ where: { storeId: pending.storeId, connectorDefinitionId: definition.id, label } });
+      if (duplicate) label = `${label} ${duplicate + 1}`;
+      connection = await prisma.appConnection.create({ data: {
+        userId: pending.userId, storeId: pending.storeId, connectorDefinitionId: definition.id,
+        label, credentials, grantedScopes, status: 'active', lastConnectedAt: new Date(),
+      } });
+    }
     const oauthState = await prisma.connectorOAuthState.findUnique({ where: { id: pending.stateId } });
     const agentIds = Array.isArray(oauthState?.agentIds) ? oauthState.agentIds.map(String) : [];
-    if (agentIds.length) {
+    if (agentIds.length && !existing) {
       await prisma.agentConnectionGrant.createMany({ data: agentIds.map((agentId) => ({ agentId, connectionId: connection.id })), skipDuplicates: true });
     }
-    await prisma.connectorAuditEvent.create({ data: { storeId: pending.storeId, connectionId: connection.id, eventType: 'oauth_connected', status: 'completed', summary: { connector: pending.slug, scopes: grantedScopes, requestedScopes, missingScopes } } });
+    await prisma.connectorAuditEvent.create({ data: { storeId: pending.storeId, connectionId: connection.id, eventType: existing ? 'oauth_reconnected' : 'oauth_connected', status: 'completed', summary: { connector: pending.slug, scopes: grantedScopes, requestedScopes, missingScopes } } });
     await syncConnectorGateway().catch(() => null);
 
     // `mcp=connected` makes the Apps page trigger a gateway sync on load, so the
     // tools reach the agents without waiting for a restart.
-    return back(`mcp=connected&slug=${pending.slug}&connectionId=${connection.id}`);
+    return back(`mcp=${existing ? 'reconnected' : 'connected'}&slug=${pending.slug}&connectionId=${connection.id}`);
   } catch (err: any) {
     console.error('[MCP OAuth] callback failed:', pending.slug, err);
     return back(

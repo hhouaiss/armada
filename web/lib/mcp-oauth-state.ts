@@ -26,6 +26,8 @@ export interface McpOAuthPending {
   userId: string;
   storeId: string;
   label: string;
+  /** Set when the flow re-authorizes an existing connection instead of creating one. */
+  connectionId?: string;
   stateId: string;
   nonce: string;
   ts: number;
