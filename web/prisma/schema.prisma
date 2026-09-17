@@ -592,3 +592,29 @@ model AgentSkill {
   @@index([skillId])
   @@map("agent_skills")
 }
+
+// TypeSafe (System One / Jev) call log — one row per request, for cost/latency/quality monitoring
+model TypeSafeCall {
+  id             String   @id @default(cuid())
+  storeId        String
+  feature        String
+  model          String   @default("jev-latest")
+  status         String
+  outcomes       String[] @default([])
+  agentName      String?
+  requestedValue String?
+  resolvedValue  String?
+  confidence     Float?
+  answers        Json?
+  latencyMs      Int
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  httpStatus     Int?
+  error          String?  @db.Text
+  taskPreview    String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([feature, createdAt])
+  @@map("typesafe_calls")
+}

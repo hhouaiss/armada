@@ -11,6 +11,7 @@
 import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 import { prisma } from '../lib/database.js';
 import { nanoid } from 'nanoid';
+import { askJev, finishCall, type ScoreAnswer } from '../lib/typesafe.js';
 
 // Injected from index.ts after Telegram is initialized
 let telegramNotifier: ((storeId: string, text: string, hasButtons: boolean) => Promise<void>) | null = null;
@@ -69,7 +70,8 @@ export const requestApprovalTool: AgentTool = {
     },
     context: ToolContext
   ): Promise<ToolResult> {
-    const { action, description, riskLevel, payload } = params;
+    const { action, payload } = params;
+    const { riskLevel, description } = await reviewRisk(params, context);
 
     // Create approval request in DB
     const expiresAt = new Date(Date.now() + MAX_WAIT_MS);
@@ -128,3 +130,75 @@ export const requestApprovalTool: AgentTool = {
     };
   },
 };
+
+const RISK_LEVELS = ['low', 'medium', 'high', 'critical'] as const;
+type RiskLevel = (typeof RISK_LEVELS)[number];
+const RISK_RAISE_CONFIDENCE = 0.5;
+
+/**
+ * Independent Jev risk assessment. The agent's own level is a floor: Jev can
+ * raise it, never lower it. Any failure keeps the agent's values.
+ */
+async function reviewRisk(
+  params: { action: string; description: string; riskLevel: RiskLevel; payload?: Record<string, any> },
+  context: ToolContext,
+): Promise<{ riskLevel: RiskLevel; description: string }> {
+  const claimed = params.riskLevel;
+  const result = await askJev(
+    {
+      action: params.action,
+      description: params.description.slice(0, 3000),
+      payload: JSON.stringify(params.payload ?? {}).slice(0, 2000),
+      context: 'A Shopify merchant\'s AI agent wants to perform this action on the live store or its marketing channels.',
+    },
+    {
+      risk: {
+        type: 'score',
+        instructions:
+          'How risky is performing `action` as described for the merchant\'s business? Consider money, customers reached, reversibility and brand impact.',
+        criteria: [
+          'Low: internal or easily reversible, no customer sees it, no money at stake.',
+          'Medium: visible to some customers or a moderate, reversible change (e.g. a draft, a small segment, one product).',
+          'High: reaches many customers or moves money, hard to undo (e.g. an email blast, store-wide price or settings change).',
+          'Critical: irreversible or potentially very damaging (e.g. deleting data, mass refunds, sending to the whole customer base with wrong content).',
+        ],
+      },
+    },
+    {
+      storeId: context.storeId,
+      feature: 'approval_risk',
+      agentName: context.agentId.split(':').pop(),
+      requestedValue: claimed,
+      taskPreview: `${params.action} — ${params.description}`,
+    },
+  );
+
+  const answer = result.answers?.risk as ScoreAnswer | undefined;
+  if (!result.ok || !answer) {
+    await finishCall(result.callId, { outcomes: ['fallback_error'], resolvedValue: claimed });
+    return { riskLevel: claimed, description: params.description };
+  }
+
+  const jevLevel = RISK_LEVELS[Math.min(3, Math.max(0, Math.round(answer.score)))];
+  const claimedIdx = RISK_LEVELS.indexOf(claimed);
+  const jevIdx = RISK_LEVELS.indexOf(jevLevel);
+  let outcome = 'risk_agreed';
+  let final: RiskLevel = claimed;
+  if (jevIdx > claimedIdx && answer.confidence >= RISK_RAISE_CONFIDENCE) {
+    outcome = 'risk_raised';
+    final = jevLevel;
+  } else if (jevIdx > claimedIdx) {
+    outcome = 'risk_higher_uncertain';
+  } else if (jevIdx < claimedIdx) {
+    outcome = 'risk_lower_than_claimed';
+  }
+  await finishCall(result.callId, { outcomes: [outcome], resolvedValue: final, confidence: answer.confidence });
+
+  if (final === claimed) return { riskLevel: claimed, description: params.description };
+  console.log(`  🛡️ Jev raised approval risk ${claimed} → ${final} (${answer.confidence.toFixed(2)})`);
+  return {
+    riskLevel: final,
+    description: `${params.description}\n\n[Risque réévalué : ${claimed} → ${final} par vérification indépendante]`,
+  };
+}
+

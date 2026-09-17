@@ -17,6 +17,7 @@ import {
   Store,
   Package,
   Users,
+  Gauge,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
@@ -45,6 +46,7 @@ const navGroups = [
     items: [
       { name: 'Capacités', href: '/skills', icon: BookOpen },
       { name: 'Journal', href: '/activity', icon: Activity },
+      { name: 'TypeSafe', href: '/typesafe', icon: Gauge },
       { name: 'Apps', href: '/integrations', icon: Puzzle },
     ],
   },
