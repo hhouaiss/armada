@@ -17,9 +17,12 @@ export type Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer;
 export interface CallLog {
   storeId: string;
   feature: string;
+  agentId?: string;
   agentName?: string;
   requestedValue?: string;
   taskPreview?: string;
+  outputPreview?: string;
+  evidence?: unknown;
   /** Per question: readable names for option keys, applied to the stored log only. */
   labels?: Record<string, Record<string, string>>;
 }
@@ -114,9 +117,12 @@ async function record(log: CallLog, data: CallData): Promise<string | undefined>
       data: {
         storeId: log.storeId,
         feature: log.feature,
+        agentId: log.agentId,
         agentName: log.agentName,
         requestedValue: log.requestedValue,
         taskPreview: log.taskPreview?.slice(0, 500),
+        outputPreview: log.outputPreview?.slice(0, 1500),
+        ...(log.evidence !== undefined && { evidence: log.evidence as any }),
         ...data,
       },
       select: { id: true },

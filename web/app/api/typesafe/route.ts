@@ -20,7 +20,11 @@ function summarize(calls: TypeSafeCall[]) {
   const latencies = answered.map(c => c.latencyMs).sort((a, b) => a - b);
   const inputTokens = calls.reduce((s, c) => s + c.inputTokens, 0);
   const outputTokens = calls.reduce((s, c) => s + c.outputTokens, 0);
-  const confidences = answered.map(c => c.confidence).filter((v): v is number => v != null);
+  // output_review stores a quality score in `confidence`; keep it out of the Jev confidence average.
+  const confidences = answered
+    .filter(c => c.feature !== 'output_review')
+    .map(c => c.confidence)
+    .filter((v): v is number => v != null);
   const byStatus: Record<string, number> = {};
   const byOutcome: Record<string, number> = {};
   for (const c of calls) {
@@ -68,19 +72,66 @@ export async function GET(request: NextRequest) {
       const date = new Date(Date.now() - d * 86_400_000).toISOString().slice(0, 10);
       daily.set(date, { date, calls: 0, errors: 0, actions: 0, latencySum: 0, answered: 0, cost: 0 });
     }
-    const ACTIONS = new Set(['name_resolved', 'mode_upgraded', 'misroute_flagged', 'risk_raised']);
+    const ACTIONS = new Set(['name_resolved', 'mode_upgraded', 'misroute_flagged', 'risk_raised', 'rating:poor']);
     for (const c of calls) {
       const day = daily.get(c.createdAt.toISOString().slice(0, 10));
       if (!day) continue;
       day.calls++;
       if (c.status !== 'ok') day.errors++;
-      if (c.outcomes.some(o => ACTIONS.has(o))) day.actions++;
+      if (c.outcomes.some(o => ACTIONS.has(o) || o.startsWith('lesson_'))) day.actions++;
       if (c.status === 'ok') { day.answered++; day.latencySum += c.latencyMs; }
       day.cost += cost(c);
     }
 
+    const reviews = all.filter(c => c.feature === 'output_review' && c.status === 'ok' && c.confidence != null);
+    const agentIds = [...new Set(reviews.map(r => r.agentId).filter((v): v is string => !!v))];
+    const [coachingRows, agentRows] = await Promise.all([
+      prisma.agentMemory.findMany({ where: { storeId, type: 'coaching' } }),
+      prisma.agent.findMany({ where: { storeId }, select: { id: true, name: true, type: true } }),
+    ]);
+    const agentInfo = new Map(agentRows.map(a => [a.id, a]));
+    const lessonsByAgent = new Map<string, any[]>();
+    const evaluationsByAgent = new Map<string, any[]>();
+    for (const row of coachingRows) {
+      try {
+        const parsed = JSON.parse(row.content);
+        lessonsByAgent.set(row.key, Array.isArray(parsed) ? parsed : parsed.lessons ?? []);
+        evaluationsByAgent.set(row.key, Array.isArray(parsed) ? [] : parsed.evaluations ?? []);
+      } catch {}
+    }
+
+    const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const agents = [...new Set([...agentIds, ...lessonsByAgent.keys()])].map(id => {
+      const mine = reviews.filter(r => r.agentId === id).reverse(); // oldest first
+      const half = Math.floor(mine.length / 2);
+      const weaknesses: Record<string, number> = {};
+      const ratings: Record<string, number> = { good: 0, weak: 0, poor: 0 };
+      for (const r of mine) {
+        for (const o of r.outcomes) {
+          if (o.startsWith('weakness:')) weaknesses[o.slice(9)] = (weaknesses[o.slice(9)] ?? 0) + 1;
+          if (o.startsWith('rating:')) ratings[o.slice(7)] = (ratings[o.slice(7)] ?? 0) + 1;
+        }
+      }
+      return {
+        agentId: id,
+        name: agentInfo.get(id)?.name ?? mine[mine.length - 1]?.agentName ?? id,
+        type: agentInfo.get(id)?.type ?? null,
+        reviews: mine.length,
+        avgQuality: avg(mine.map(r => r.confidence!)),
+        earlierQuality: mine.length >= 4 ? avg(mine.slice(0, half).map(r => r.confidence!)) : null,
+        recentQuality: mine.length >= 4 ? avg(mine.slice(half).map(r => r.confidence!)) : null,
+        ratings,
+        weaknesses,
+        qualitySeries: mine.slice(-30).map(r => ({ at: r.createdAt, quality: r.confidence })),
+        lessons: lessonsByAgent.get(id) ?? [],
+        evaluations: (evaluationsByAgent.get(id) ?? []).slice(0, 5),
+        livrablesReviewed: mine.filter(r => Array.isArray(r.evidence) && r.evidence.length > 0).length,
+      };
+    }).sort((a, b) => b.reviews - a.reviews);
+
     return NextResponse.json({
       days,
+      agents,
       truncated: all.length === MAX_ROWS,
       pricingConfigured: INPUT_RATE > 0 || OUTPUT_RATE > 0,
       summary: summarize(calls),

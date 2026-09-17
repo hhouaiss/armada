@@ -596,6 +596,7 @@ model TypeSafeCall {
   model          String   @default("jev-latest")
   status         String
   outcomes       String[] @default([])
+  agentId        String?
   agentName      String?
   requestedValue String?
   resolvedValue  String?
@@ -607,9 +608,12 @@ model TypeSafeCall {
   httpStatus     Int?
   error          String?  @db.Text
   taskPreview    String?  @db.Text
+  outputPreview  String?  @db.Text
+  evidence       Json?
   createdAt      DateTime @default(now())
 
   @@index([storeId, createdAt])
   @@index([feature, createdAt])
+  @@index([agentId, feature, createdAt])
   @@map("typesafe_calls")
 }

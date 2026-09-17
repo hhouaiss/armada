@@ -17,6 +17,8 @@ import { createLLMProvider } from '../lib/llm/provider-factory.js';
 import { LLMProvider } from '../lib/llm/types.js';
 import { classifyComplexity } from '../core/complexity-router.js';
 import { MemoryEngine } from '../lib/memory-engine.js';
+import { reviewAgentTurn, buildCoachingSection, type ToolTraceEntry, type TurnReview } from '../lib/output-review.js';
+import { isNotionWrite, extractNotionRefs, fetchNotionLivrables, type NotionWrite } from '../lib/notion-livrables.js';
 import {
   createExecutableApproval,
   executeApproval,
@@ -186,6 +188,15 @@ export class BaseAgent {
     return /^(yes|oui|ok|go|sure|yep|yeah|proceed|confirm|approve|do it|vas-y|absolument|d'accord|c'est bon|parfait|execute|exécute|confirme|approuve)/.test(lower);
   }
 
+  private static pendingReviews = new Map<string, Promise<TurnReview | undefined>>();
+
+  /** Quality review of the latest turn in a conversation, if it completes within timeoutMs. */
+  static async takeTurnReview(conversationId: string, timeoutMs = 20_000): Promise<TurnReview | undefined> {
+    const review = BaseAgent.pendingReviews.get(conversationId);
+    if (!review) return undefined;
+    return Promise.race([review, new Promise<undefined>(r => setTimeout(() => r(undefined), timeoutMs))]);
+  }
+
   async chat(
     message: string,
     context: ToolContext,
@@ -204,6 +215,8 @@ export class BaseAgent {
     const addToHistory = (msg: Anthropic.MessageParam) => {
       newMessages.push(msg);
     };
+    const toolTrace: ToolTraceEntry[] = [];
+    const notionWrites: NotionWrite[] = [];
 
     // ── Approval gate ─────────────────────────────────────────────────────────
     // If the user's message is a confirmation, execute the pending approved
@@ -322,6 +335,7 @@ export class BaseAgent {
           );
 
           if (overCap) {
+            toolTrace.push({ tool: toolCall.name, status: 'blocked', detail: 'tool iteration cap reached' });
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolCall.id,
@@ -338,6 +352,7 @@ export class BaseAgent {
           // tool grants are resolved before approval is created.
           const policy = await this.toolRegistry.getPolicy(toolCall.name, toolCall.input, context);
           if (policy === 'blocked') {
+            toolTrace.push({ tool: toolCall.name, status: 'blocked' });
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolCall.id,
@@ -357,6 +372,7 @@ export class BaseAgent {
               conversationId,
               audit,
             });
+            toolTrace.push({ tool: toolCall.name, status: 'approval_pending' });
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolCall.id,
@@ -395,6 +411,20 @@ export class BaseAgent {
           );
 
           const toolDuration = Date.now() - toolStartTime;
+          const notionRefs = result.success && isNotionWrite(toolCall.name)
+            ? extractNotionRefs(toolCall.name, toolCall.input, result.data)
+            : [];
+          if (notionRefs.length) notionWrites.push({ tool: toolCall.name, refs: notionRefs });
+          toolTrace.push({
+            tool: toolCall.name,
+            status: result.success ? 'ok' : 'error',
+            // Connector (MCP) results stay private; built-in tool data is what the review checks claims against.
+            detail: notionRefs.length
+              ? `Notion page(s) written: ${notionRefs.join(', ')}`
+              : toolCall.name.includes('__')
+                ? (result.success ? '[connector result redacted]' : `Error: ${result.error}`.slice(0, 300))
+                : (result.success ? JSON.stringify(result.data ?? null) : `Error: ${result.error}`).slice(0, 600),
+          });
           try {
             await updateOperation(toolCall.id, {
               status: result.success ? 'completed' : 'failed',
@@ -453,6 +483,8 @@ export class BaseAgent {
       //   LEGACY (inline): [LIVRABLE:slug:title]
       //     → full response is the content, replace marker with real DB id
       let processedResponse = finalResponse;
+      let livrableContent: string | undefined;
+      let livrableTitle: string | undefined;
 
       const blockRegex = /\[LIVRABLE_CONTENT:([^:\]]+):([^\]]+)\]([\s\S]*?)\[\/LIVRABLE_CONTENT\]/;
       const blockMatch = processedResponse.match(blockRegex);
@@ -461,6 +493,8 @@ export class BaseAgent {
         const slug = blockMatch[1].trim();
         const title = blockMatch[2].trim();
         const content = blockMatch[3].trim();
+        livrableContent = content;
+        livrableTitle = title;
         // Strip the block — keep only the brief chat summary
         processedResponse = processedResponse.replace(blockMatch[0], '').trim();
         try {
@@ -528,6 +562,28 @@ export class BaseAgent {
 
       this.sessionManager.complete(session.id, 'completed');
       console.log(`  ✓ Agent responded (session saved to DB)\n`);
+
+      // Background quality review: never delays the reply. Dispatchers can await it via takeTurnReview.
+      const review = reviewAgentTurn({
+        storeId: context.storeId,
+        agentId: this.config.id,
+        agentName: this.config.name,
+        agentType: this.config.type,
+        request: message,
+        response: processedResponse,
+        toolTrace,
+        livrables: livrableContent
+          ? [{ source: 'armada', title: livrableTitle, content: livrableContent.slice(0, 6000) }]
+          : [],
+        fetchLivrables: notionWrites.length
+          ? () => fetchNotionLivrables(notionWrites, this.toolRegistry, { ...context, agentId: this.config.id })
+          : undefined,
+      });
+      BaseAgent.pendingReviews.set(conversationId, review);
+      void review.finally(() => setTimeout(() => {
+        if (BaseAgent.pendingReviews.get(conversationId) === review) BaseAgent.pendingReviews.delete(conversationId);
+      }, 60_000));
+
       return processedResponse;
     } catch (error) {
       this.sessionManager.complete(session.id, 'failed');
@@ -687,13 +743,14 @@ You are an AI agent for a Shopify store, powered by the StoreTeam platform.`;
 
     // Load memory index (Couche 1 — always injected, lightweight)
     const memoryEngine = new MemoryEngine(this.config.storeId);
-    const [memorySummary, inboxSection] = await Promise.all([
+    const [memorySummary, inboxSection, coachingSection] = await Promise.all([
       memoryEngine.buildIndexSummary(),
       memoryEngine.buildInboxSection(this.config.id, conversationId),
+      buildCoachingSection(this.config.storeId, this.config.id, this.config.name).catch(() => ''),
     ]);
     const memorySection = memorySummary ? `\n\n${memorySummary}` : '';
 
-    return `${systemPrompt}${skillsSection}${additionalContext}${memorySection}${inboxSection}
+    return `${systemPrompt}${skillsSection}${additionalContext}${memorySection}${inboxSection}${coachingSection}
 
 CURRENT DATE & TIME: ${now.toUTCString()} (today is ${todayStr})
 When working with date ranges, always use dates relative to today (${todayStr}). For "last 30 days" use ${last30StartStr} to ${todayStr}.

@@ -1,6 +1,7 @@
 import { ToolContext } from '../types/operations.js';
 import { MemoryEngine, markTaskRunning, clearTaskRunning } from './memory-engine.js';
 import { saveChatMessage, prisma } from './database.js';
+import { BaseAgent } from '../agents/base-agent.js';
 
 /**
  * Async dispatch — running a specialist outside the request/response cycle.
@@ -62,7 +63,8 @@ async function execute({ agent, task, context, conversationId, taskId }: Backgro
     console.log(`✓ Async dispatch done: ${name} in ${elapsed}s`);
 
     await engine.completeInboxTask(agent.config.id, taskId, { result: response });
-    await deliver(storeId, agent.config.id, name, response, task);
+    const quality = await BaseAgent.takeTurnReview(conversationId);
+    await deliver(storeId, agent.config.id, name, response, task, quality?.warning);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`✗ Async dispatch failed: ${name} — ${message}`);
@@ -91,20 +93,23 @@ async function deliver(
   agentId: string,
   agentName: string,
   response: string,
-  task: string
+  task: string,
+  qualityWarning?: string
 ): Promise<void> {
   await saveChatMessage({
     storeId,
     agentId,
     sender: 'agent',
     content: response,
-    metadata: { asyncDispatch: true, task },
+    metadata: { asyncDispatch: true, task, ...(qualityWarning && { qualityWarning }) },
   }).catch((err) => console.error('Async dispatch: failed to save chat message:', err));
 
   broadcaster?.(storeId, { type: 'agent_message', agentId, message: response });
 
   if (telegramNotifier) {
-    const header = `✅ *${agentName}* a terminé sa tâche\n_${truncate(task, 120)}_\n\n`;
+    const header =
+      `✅ *${agentName}* a terminé sa tâche\n_${truncate(task, 120)}_\n\n` +
+      (qualityWarning ? `⚠️ ${qualityWarning} À relire avant utilisation.\n\n` : '');
     await telegramNotifier(storeId, header + truncate(response, 3500), false).catch((err) =>
       console.error('Async dispatch: Telegram notify failed:', err)
     );

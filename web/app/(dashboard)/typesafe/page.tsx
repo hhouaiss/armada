@@ -19,6 +19,11 @@ const FEATURES: Record<string, { label: string; description: string; outcomes: s
     description: 'Chaque délégation du Major : nom du spécialiste, bon spécialiste, sync ou async.',
     outcomes: ['name_resolved', 'name_low_confidence', 'name_no_match', 'mode_upgraded', 'misroute_flagged', 'fit_ok', 'fallback_error'],
   },
+  output_review: {
+    label: 'Contrôle qualité',
+    description: 'Chaque réponse d’agent est relue par Jev. Les défauts récurrents deviennent des règles de coaching, retirées quand le défaut disparaît.',
+    outcomes: ['rating:good', 'rating:weak', 'rating:poor', 'flag:unsupported_claims', 'flag:hidden_tool_error', 'flag:language', 'flag:livrable', 'notion_read', 'notion_unreadable', 'lesson_added', 'lesson_retired', 'memory_saved', 'fallback_error'],
+  },
   approval_risk: {
     label: 'Risque des approbations',
     description: 'Évaluation indépendante du risque déclaré par l’agent. Jev peut relever le niveau, jamais le baisser.',
@@ -39,7 +44,69 @@ const OUTCOMES: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 
   risk_higher_uncertain: { label: 'Plus risqué (incertain)', tone: 'neutral' },
   risk_lower_than_claimed: { label: 'Moins risqué que déclaré', tone: 'neutral' },
   fallback_error: { label: 'Erreur, repli', tone: 'bad' },
+  'rating:good': { label: 'Bonne réponse', tone: 'good' },
+  'rating:weak': { label: 'Réponse moyenne', tone: 'warn' },
+  'rating:poor': { label: 'Réponse faible', tone: 'bad' },
+  'flag:unsupported_claims': { label: 'Affirmations non étayées', tone: 'bad' },
+  'flag:hidden_tool_error': { label: 'Échec d’outil masqué', tone: 'bad' },
+  'flag:language': { label: 'Mauvaise langue', tone: 'bad' },
+  'flag:livrable': { label: 'Livrable inutilisable', tone: 'bad' },
+  notion_read: { label: 'Pages Notion relues', tone: 'good' },
+  notion_unreadable: { label: 'Notion illisible', tone: 'warn' },
+  memory_saved: { label: 'Mémorisé chez l’agent', tone: 'neutral' },
+  weakness: { label: 'Défaut', tone: 'neutral' },
+  lesson_added: { label: 'Règle ajoutée', tone: 'warn' },
+  lesson_retired: { label: 'Règle retirée', tone: 'good' },
 };
+
+const WEAKNESS_LABELS: Record<string, string> = {
+  none: 'Aucun',
+  incomplete: 'Incomplet',
+  unsupported_claims: 'Non étayé',
+  too_generic: 'Trop générique',
+  ignored_tool_error: 'Erreur d’outil ignorée',
+  wrong_language: 'Mauvaise langue',
+  off_topic: 'Hors sujet',
+};
+
+const SCORE_LABELS: Record<string, string> = {
+  completion: 'Demande traitée /3',
+  specificity: 'Précision /2',
+  unsupported_claims: 'Non étayé',
+  language_mismatch: 'Langue',
+  tool_issue_disclosed: 'Échec signalé',
+  livrable_quality: 'Livrable /3',
+};
+
+function journalKey(name: string) {
+  const slug = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `qualite/${slug || 'agent'}`;
+}
+
+function EvidenceList({ evidence }: { evidence: any[] }) {
+  return (
+    <ul className="space-y-1">
+      {evidence.map((e, i) => (
+        <li key={i} className="font-mono text-[10px] flex flex-wrap gap-x-2">
+          <span className="uppercase text-[var(--armada-text)]/40">{e.source}</span>
+          {safeUrl(e.url) ? (
+            <a href={safeUrl(e.url)} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} className="text-[var(--armada-primary)] underline truncate max-w-xs">
+              {e.title ?? e.url}
+            </a>
+          ) : (
+            <span>{e.title ?? e.ref ?? 'livrable'}</span>
+          )}
+          {e.error ? <span className="text-red-500">non lu : {e.error}</span> : e.chars != null && <span className="text-[var(--armada-text)]/40">{e.chars} car. relus</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const safeUrl = (u?: string) => (typeof u === 'string' && u.startsWith('https://') ? u : undefined);
+
+const countOutcome = (byOutcome: Record<string, number>, key: string) =>
+  Object.entries(byOutcome).reduce((n, [k, v]) => (k === key || k.startsWith(`${key}:`) ? n + v : n), 0);
 
 const TONES = {
   good: 'bg-green-500/10 text-green-600 border-green-500/20',
@@ -54,8 +121,126 @@ const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`)
 const surface = { backgroundColor: 'var(--armada-surface)' };
 
 function Chip({ outcome }: { outcome: string }) {
-  const o = OUTCOMES[outcome] ?? { label: outcome, tone: 'neutral' as const };
-  return <span className={`inline-flex px-2 py-0.5 rounded-full border text-[10px] font-mono whitespace-nowrap ${TONES[o.tone]}`}>{o.label}</span>;
+  const [base, detail] = outcome.startsWith('flag:') || outcome.startsWith('rating:') ? [outcome, ''] : outcome.split(':');
+  const o = OUTCOMES[base] ?? { label: base, tone: 'neutral' as const };
+  const label = detail ? `${o.label} : ${WEAKNESS_LABELS[detail] ?? detail}` : o.label;
+  return <span className={`inline-flex px-2 py-0.5 rounded-full border text-[10px] font-mono whitespace-nowrap ${TONES[o.tone]}`}>{label}</span>;
+}
+
+function Sparkline({ points }: { points: { quality: number }[] }) {
+  if (points.length < 2) return null;
+  const w = 160, h = 36;
+  const d = points
+    .map((p, i) => `${i ? 'L' : 'M'}${((i / (points.length - 1)) * w).toFixed(1)},${(h - p.quality * h).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible" aria-label="Évolution de la qualité">
+      <line x1={0} x2={w} y1={h - 0.75 * h} y2={h - 0.75 * h} stroke="currentColor" strokeOpacity={0.15} strokeDasharray="3 3" />
+      <path d={d} fill="none" stroke="var(--armada-primary)" strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+function AgentQuality({ agent }: { agent: any }) {
+  const active = agent.lessons.filter((l: any) => !l.retiredAt);
+  const retired = agent.lessons.filter((l: any) => l.retiredAt);
+  const total = agent.ratings.good + agent.ratings.weak + agent.ratings.poor;
+  const trend = agent.earlierQuality != null && agent.recentQuality != null ? agent.recentQuality - agent.earlierQuality : null;
+  const topWeak = Object.entries(agent.weaknesses as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return (
+    <div className="rounded-2xl border border-[var(--armada-accent)]/50 p-4 armada-card space-y-3" style={surface}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{agent.name}</p>
+          <p className="text-[10px] font-mono text-[var(--armada-text)]/40">{agent.type ?? 'agent'} · {agent.reviews} réponses relues</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xl font-medium tabular-nums">{agent.avgQuality != null ? pct(agent.avgQuality) : '—'}</p>
+          {trend != null && (
+            <p className={`text-[10px] font-mono ${trend >= 0.02 ? 'text-green-600' : trend <= -0.02 ? 'text-red-500' : 'text-[var(--armada-text)]/40'}`}>
+              {trend >= 0 ? '+' : ''}{(trend * 100).toFixed(1)} pts ({pct(agent.earlierQuality)} → {pct(agent.recentQuality)})
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-4 flex-wrap">
+        <Sparkline points={agent.qualitySeries} />
+        {total > 0 && (
+          <div className="flex-1 min-w-[140px]">
+            <div className="flex h-2 rounded overflow-hidden">
+              <div className="bg-green-500" style={{ width: `${(agent.ratings.good / total) * 100}%` }} />
+              <div className="bg-yellow-500" style={{ width: `${(agent.ratings.weak / total) * 100}%` }} />
+              <div className="bg-red-500" style={{ width: `${(agent.ratings.poor / total) * 100}%` }} />
+            </div>
+            <p className="text-[10px] font-mono text-[var(--armada-text)]/40 mt-1">
+              {agent.ratings.good} bonnes · {agent.ratings.weak} moyennes · {agent.ratings.poor} faibles
+            </p>
+          </div>
+        )}
+      </div>
+      {topWeak.length > 0 && (
+        <p className="text-[10px] font-mono text-[var(--armada-text)]/50">
+          Défauts fréquents : {topWeak.map(([k, v]) => `${WEAKNESS_LABELS[k] ?? k} (${v})`).join(' · ')}
+        </p>
+      )}
+      {agent.evaluations?.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/40">Dernières évaluations mémorisées</p>
+          {agent.evaluations.map((e: any) => (
+            <div key={e.at} className="rounded-xl border border-[var(--armada-accent)]/40 px-3 py-2 space-y-1">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[11px] text-[var(--armada-text)]/70 line-clamp-2">« {e.request} »</p>
+                <Chip outcome={`rating:${e.rating}`} />
+              </div>
+              <p className="font-mono text-[10px] text-[var(--armada-text)]/40">
+                {new Date(e.at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · {Math.round(e.quality * 100)} % ·{' '}
+                {Object.entries(e.scores as Record<string, number>).map(([k, v]) => `${SCORE_LABELS[k] ?? k} ${v}`).join(' · ')}
+              </p>
+              {e.livrables?.length > 0 && (
+                <p className="font-mono text-[10px] text-[var(--armada-text)]/50">
+                  Livrables :{' '}
+                  {e.livrables.map((l: any, i: number) => (
+                    <span key={i}>
+                      {i > 0 && ' · '}
+                      {safeUrl(l.url) ? <a href={safeUrl(l.url)} target="_blank" rel="noreferrer" className="text-[var(--armada-primary)] underline">{l.title ?? l.source}</a> : (l.title ?? l.source)}
+                      {!l.readable && ' (illisible)'}
+                    </span>
+                  ))}
+                </p>
+              )}
+            </div>
+          ))}
+          <p className="font-mono text-[10px] text-[var(--armada-text)]/30">
+            Mémoire de l’agent : {journalKey(agent.name)} · {agent.livrablesReviewed} réponse(s) avec livrables relus
+          </p>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/40">Règles de coaching actives ({active.length})</p>
+        {active.length === 0 && <p className="text-[11px] text-[var(--armada-text)]/40">Aucune : pas de défaut récurrent.</p>}
+        {active.map((l: any) => (
+          <div key={l.weakness + l.addedAt} className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-3 py-2">
+            <p className="text-[11px]">{l.rule}</p>
+            <p className="text-[10px] font-mono text-[var(--armada-text)]/40 mt-0.5">
+              {WEAKNESS_LABELS[l.weakness] ?? l.weakness} · {l.occurrences} occurrences · depuis le {new Date(l.addedAt).toLocaleDateString('fr-FR')}
+            </p>
+          </div>
+        ))}
+        {retired.length > 0 && (
+          <details className="text-[11px]">
+            <summary className="cursor-pointer text-[10px] font-mono text-green-600">{retired.length} règle(s) retirée(s) : défaut corrigé</summary>
+            <ul className="mt-1 space-y-1">
+              {retired.map((l: any) => (
+                <li key={l.weakness + l.addedAt} className="text-[var(--armada-text)]/60">
+                  {WEAKNESS_LABELS[l.weakness] ?? l.weakness} · ajoutée le {new Date(l.addedAt).toLocaleDateString('fr-FR')}, retirée le {new Date(l.retiredAt).toLocaleDateString('fr-FR')}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -201,8 +386,8 @@ export default function TypeSafePage() {
                               <div key={o} className="flex items-center justify-between gap-3">
                                 <Chip outcome={o} />
                                 <span className="font-mono text-xs tabular-nums">
-                                  {fs.byOutcome[o] ?? 0}
-                                  <span className="text-[var(--armada-text)]/40"> · {pct((fs.byOutcome[o] ?? 0) / fs.calls)}</span>
+                                  {countOutcome(fs.byOutcome, o)}
+                                  <span className="text-[var(--armada-text)]/40"> · {pct(countOutcome(fs.byOutcome, o) / fs.calls)}</span>
                                 </span>
                               </div>
                             ))}
@@ -213,6 +398,19 @@ export default function TypeSafePage() {
                   );
                 })}
             </div>
+
+            {(!feature || feature === 'output_review') && (
+              <div className="space-y-3">
+                <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/40">Qualité des agents et coaching</p>
+                {(data.agents ?? []).length === 0 ? (
+                  <p className="text-[11px] font-mono text-[var(--armada-text)]/30">Aucune réponse relue sur la période.</p>
+                ) : (
+                  <div className="grid md:grid-cols-2 gap-3">
+                    {data.agents.map((a: any) => <AgentQuality key={a.agentId} agent={a} />)}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="rounded-2xl border border-[var(--armada-accent)]/50 p-4 armada-card" style={surface}>
               <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/40 mb-3">Appels par jour</p>
@@ -249,7 +447,7 @@ export default function TypeSafePage() {
                     <tr className="text-left text-[10px] font-mono uppercase tracking-widest text-[var(--armada-text)]/40 border-b border-[var(--armada-accent)]/50">
                       <th className="px-4 py-2 font-normal">Date</th>
                       <th className="px-4 py-2 font-normal">Usage</th>
-                      <th className="px-4 py-2 font-normal">Demandé → retenu</th>
+                      <th className="px-4 py-2 font-normal">Sujet</th>
                       <th className="px-4 py-2 font-normal">Décisions</th>
                       <th className="px-4 py-2 font-normal text-right">Latence</th>
                       <th className="px-4 py-2 font-normal text-right">Tokens</th>
@@ -265,8 +463,9 @@ export default function TypeSafePage() {
                           </td>
                           <td className="px-4 py-2 whitespace-nowrap">{FEATURES[c.feature]?.label ?? c.feature}</td>
                           <td className="px-4 py-2 font-mono whitespace-nowrap">
-                            {c.requestedValue ?? '—'}
-                            {c.resolvedValue && c.resolvedValue !== c.requestedValue && <span className="text-[var(--armada-primary)]"> → {c.resolvedValue}</span>}
+                            {c.feature === 'output_review' && `${c.agentName ?? 'Agent'} · ${c.confidence != null ? pct(c.confidence) : '—'}`}
+                            {c.feature !== 'output_review' && (c.requestedValue ?? '—')}
+                            {c.feature !== 'output_review' && c.resolvedValue && c.resolvedValue !== c.requestedValue && <span className="text-[var(--armada-primary)]"> → {c.resolvedValue}</span>}
                           </td>
                           <td className="px-4 py-2">
                             <div className="flex flex-wrap gap-1">
@@ -282,8 +481,19 @@ export default function TypeSafePage() {
                           <tr className="border-b border-[var(--armada-accent)]/30" style={{ backgroundColor: 'var(--armada-bg)' }}>
                             <td colSpan={7} className="px-4 py-3 space-y-3">
                               {c.agentName && <p className="font-mono text-[10px] text-[var(--armada-text)]/40">Agent : {c.agentName}</p>}
-                              {c.taskPreview && <p className="text-[var(--armada-text)]/70 whitespace-pre-wrap">{c.taskPreview}</p>}
+                              {c.taskPreview && <p className="text-[var(--armada-text)]/70 whitespace-pre-wrap">{c.feature === 'output_review' && <span className="font-mono text-[10px] text-[var(--armada-text)]/40">Demande : </span>}{c.taskPreview}</p>}
+                              {c.outputPreview && (
+                                <p className="text-[var(--armada-text)]/60 whitespace-pre-wrap border-l-2 border-[var(--armada-accent)] pl-3 max-h-48 overflow-y-auto">
+                                  <span className="font-mono text-[10px] text-[var(--armada-text)]/40">Réponse : </span>{c.outputPreview}
+                                </p>
+                              )}
                               {c.error && <p className="font-mono text-red-500 break-all">{c.error}</p>}
+                              {Array.isArray(c.evidence) && c.evidence.length > 0 && (
+                                <div>
+                                  <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--armada-text)]/40 mb-1">Livrables relus par Jev</p>
+                                  <EvidenceList evidence={c.evidence} />
+                                </div>
+                              )}
                               {c.answers && (
                                 <div className="grid md:grid-cols-2 gap-4">
                                   {Object.entries(c.answers).map(([id, a]) => <AnswerDetail key={id} id={id} answer={a} />)}
