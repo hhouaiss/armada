@@ -2,7 +2,7 @@ import { AgentTool, ToolContext, ToolResult } from '../types/operations.js';
 import { MemoryEngine } from '../lib/memory-engine.js';
 import { runInBackground } from '../lib/async-dispatch.js';
 import { askJev, finishCall, type ChoiceAnswer, type Question } from '../lib/typesafe.js';
-import { BaseAgent as BaseAgentClass, type BaseAgent } from '../agents/base-agent.js';
+import type { BaseAgent } from '../agents/base-agent.js';
 
 export const dispatchToSpecialistTool: AgentTool = {
   name: 'dispatch_to_specialist',
@@ -127,8 +127,8 @@ export const dispatchToSpecialistTool: AgentTool = {
     }
 
     // ── Sync: wait for the specialist ───────────────────────────────────────
-    const response = await agent.chat(task, subContext, subConversationId);
-    const quality = await BaseAgentClass.takeTurnReview(subConversationId);
+    const { response, review: quality, initialReview, corrected } =
+      await agent.chatWithQualityControl(task, subContext, subConversationId);
 
     // If not a future task, write to inbox AFTER successful execution
     // (so the agent remembers what they committed to in this dispatch)
@@ -149,6 +149,10 @@ export const dispatchToSpecialistTool: AgentTool = {
           qualityCheck: {
             rating: quality.rating,
             score: Number(quality.quality.toFixed(2)),
+            ...(corrected && {
+              correctedAfterReview: true,
+              initialIssues: initialReview?.flags,
+            }),
             ...(quality.warning && {
               warning: `${quality.warning} Vérifie ce résultat avant de le transmettre au marchand : corrige-le, redemande à ${specialist} en précisant, ou signale la limite.`,
             }),

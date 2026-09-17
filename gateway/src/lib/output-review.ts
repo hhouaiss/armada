@@ -15,7 +15,27 @@ export interface TurnReview {
   flags: string[];
   /** Merchant/Major-facing warning, only for poor outputs. */
   warning?: string;
+  /** Instruction for the agent to fix a correctable problem; absent when nothing actionable or already a correction turn. */
+  correction?: string;
+  callId?: string;
 }
+
+export const CORRECTION_MARKER = '[Contrôle qualité Jev — correction demandée]';
+
+const CORRECTABLE_FLAGS = ['livrable_missing', 'livrable', 'unsupported_claims', 'hidden_tool_error', 'language'] as const;
+
+const CORRECTION_TEXT: Record<(typeof CORRECTABLE_FLAGS)[number], string> = {
+  livrable_missing:
+    "La demande attend un vrai livrable mais aucun livrable n'a été enregistré. Produis maintenant le livrable COMPLET : " +
+    'soit dans un bloc [LIVRABLE_CONTENT:slug:Titre]…[/LIVRABLE_CONTENT], soit dans la page Notion prévue (outils Notion). Un résumé dans le chat ne suffit pas.',
+  livrable:
+    "Le livrable enregistré n'est pas utilisable en l'état (vide, brouillon ou incomplet). Complète-le entièrement et mets-le à jour au même endroit.",
+  unsupported_claims:
+    "Ta réponse affirme des chiffres, données ou actions non confirmés par tes outils. Vérifie avec les outils et corrige, ou indique clairement ce qui n'est pas confirmé.",
+  hidden_tool_error:
+    "Un outil a échoué ou attend une approbation mais ta réponse présente l'action comme faite. Corrige : dis ce qui n'a pas abouti et quelle est la prochaine étape.",
+  language: 'Ta réponse n’est pas dans la langue du marchand. Reformule-la dans sa langue.',
+};
 
 const RECURRENCE_WINDOW = 20;
 const RECURRENCE_THRESHOLD = 2;
@@ -44,6 +64,7 @@ const WARNING_TEXT: Record<string, string> = {
   too_generic: 'la réponse est trop générique',
   off_topic: 'la réponse ne traite pas la question posée',
   livrable: 'le livrable n’est pas utilisable en l’état',
+  livrable_missing: 'aucun livrable n’a été enregistré alors que la demande en attend un',
 };
 
 const CHECKS_DESCRIPTION =
@@ -82,6 +103,8 @@ type ReviewInput = TurnInput & {
   agentId: string;
   /** Reads back deliverables stored outside the chat (Notion) right before judging. */
   fetchLivrables?: () => Promise<LivrableEvidence[]>;
+  /** This turn answers a Jev correction request: reviewed and logged, never corrected again. */
+  isCorrection?: boolean;
 };
 
 /** Never throws: a review failure must not affect the agent turn. */
@@ -124,6 +147,10 @@ export async function reviewAgentTurn(input: ReviewInput): Promise<TurnReview | 
     const disclosed = (a.tool_issue_disclosed as NoulAnswer | undefined)?.noul;
     const livrableScore = (a.livrable_quality as ScoreAnswer | undefined)?.score;
     const main = a.main_weakness as ChoiceAnswer;
+    const deliverableExpected = (a.deliverable_expected as NoulAnswer).noul;
+    const claimsDelivered = (a.claims_delivered as NoulAnswer).noul;
+    // A Notion page that was written but could not be read back is not the agent's fault.
+    const hasLivrable = livrables.some(l => l.content || l.source === 'notion');
 
     const quality =
       livrableScore === undefined
@@ -136,6 +163,7 @@ export async function reviewAgentTurn(input: ReviewInput): Promise<TurnReview | 
     if (disclosed !== undefined && disclosed <= 0.3) flags.push('hidden_tool_error');
     if (mismatch >= 0.7) flags.push('language');
     if (livrableScore !== undefined && livrableScore < 0.75) flags.push('livrable');
+    if (!hasLivrable && (deliverableExpected >= 0.7 || claimsDelivered >= 0.7)) flags.push('livrable_missing');
 
     let rating: Rating = quality >= 0.75 ? 'good' : quality >= 0.5 ? 'weak' : 'poor';
     if (flags.length > 0) rating = 'poor';
@@ -146,6 +174,9 @@ export async function reviewAgentTurn(input: ReviewInput): Promise<TurnReview | 
     const outcomes = [`rating:${rating}`, ...flags.map(f => `flag:${f}`)];
     if (weakness) outcomes.push(`weakness:${weakness}`);
     if (livrables.some(l => l.source === 'notion')) outcomes.push(fetched.some(l => l.content) ? 'notion_read' : 'notion_unreadable');
+    const correctable = flags.filter((f): f is (typeof CORRECTABLE_FLAGS)[number] => (CORRECTABLE_FLAGS as readonly string[]).includes(f));
+    if (input.isCorrection) outcomes.push(rating === 'poor' ? 'correction_failed' : 'correction_fixed');
+    else if (correctable.length) outcomes.push('correction_requested');
     await finishCall(result.callId, { outcomes, resolvedValue: rating, confidence: Number(quality.toFixed(3)) });
 
     const scores: Record<string, number> = {
@@ -155,6 +186,7 @@ export async function reviewAgentTurn(input: ReviewInput): Promise<TurnReview | 
       language_mismatch: round(mismatch),
       ...(disclosed !== undefined && { tool_issue_disclosed: round(disclosed) }),
       ...(livrableScore !== undefined && { livrable_quality: round(livrableScore) }),
+      deliverable_expected: round(deliverableExpected),
     };
     const evaluation: Evaluation = {
       at: new Date().toISOString(),
@@ -182,7 +214,14 @@ export async function reviewAgentTurn(input: ReviewInput): Promise<TurnReview | 
       quality,
       weakness,
       flags,
+      callId: result.callId,
       warning: rating === 'poor' && reasons.length ? `Contrôle qualité Jev : ${reasons.join(' ; ')}.` : undefined,
+      correction:
+        !input.isCorrection && correctable.length
+          ? `${CORRECTION_MARKER}\nDemande initiale : « ${input.request.slice(0, 500)} »\n\nProblème(s) détecté(s) :\n` +
+            correctable.map(f => `- ${CORRECTION_TEXT[f]}`).join('\n') +
+            '\n\nCorrige maintenant, puis donne ta réponse finale au marchand (sans mentionner ce contrôle).'
+          : undefined,
     };
   } catch (err) {
     console.warn('[output-review] failed:', err);
@@ -259,6 +298,7 @@ function advice(e: Evaluation): string {
   if (e.flags.includes('unsupported_claims')) return LESSON_RULES.unsupported_claims;
   if (e.flags.includes('hidden_tool_error')) return LESSON_RULES.ignored_tool_error;
   if (e.flags.includes('language')) return LESSON_RULES.wrong_language;
+  if (e.flags.includes('livrable_missing')) return 'Quand la demande attend un livrable, enregistre-le (bloc LIVRABLE_CONTENT ou page Notion) avant d’annoncer que c’est fait.';
   if (e.flags.includes('livrable')) return 'Ne livre pas une page brouillon ou vide : termine le contenu avant de l’annoncer comme prêt.';
   if (e.weakness && e.weakness !== 'none') return LESSON_RULES[e.weakness];
   return 'Rien à corriger : garde cette approche.';

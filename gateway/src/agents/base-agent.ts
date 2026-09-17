@@ -17,7 +17,8 @@ import { createLLMProvider } from '../lib/llm/provider-factory.js';
 import { LLMProvider } from '../lib/llm/types.js';
 import { classifyComplexity } from '../core/complexity-router.js';
 import { MemoryEngine } from '../lib/memory-engine.js';
-import { reviewAgentTurn, buildCoachingSection, type ToolTraceEntry, type TurnReview } from '../lib/output-review.js';
+import { reviewAgentTurn, buildCoachingSection, CORRECTION_MARKER, type ToolTraceEntry, type TurnReview } from '../lib/output-review.js';
+import { deliverAgentMessage } from '../lib/async-dispatch.js';
 import { isNotionWrite, extractNotionRefs, fetchNotionLivrables, type NotionWrite } from '../lib/notion-livrables.js';
 import {
   createExecutableApproval,
@@ -189,6 +190,48 @@ export class BaseAgent {
   }
 
   private static pendingReviews = new Map<string, Promise<TurnReview | undefined>>();
+  private static turnCounter = new Map<string, number>();
+
+  /**
+   * Runs a turn, waits for Jev's review and, when it finds a correctable problem
+   * (missing or unusable livrable, unsupported claims, hidden tool failure, wrong
+   * language), sends the agent one correction turn and re-reviews it.
+   */
+  async chatWithQualityControl(
+    message: string,
+    context: ToolContext,
+    conversationId: string,
+  ): Promise<{ response: string; review?: TurnReview; initialReview?: TurnReview; corrected: boolean }> {
+    const ctx: ToolContext = { ...context, agentId: this.config.id, qualityControl: 'caller' };
+    const response = await this.chat(message, ctx, conversationId);
+    const initialReview = await BaseAgent.takeTurnReview(conversationId);
+    if (!initialReview?.correction) return { response, review: initialReview, corrected: false };
+
+    console.log(`  🔁 Jev asked ${this.config.name} to correct: ${initialReview.flags.join(', ')}`);
+    try {
+      const fixed = await this.chat(initialReview.correction, ctx, conversationId);
+      const review = await BaseAgent.takeTurnReview(conversationId);
+      return { response: fixed, review, initialReview, corrected: true };
+    } catch (err) {
+      console.warn(`  ⚠️ Correction turn failed for ${this.config.name}:`, err);
+      return { response, review: initialReview, initialReview, corrected: false };
+    }
+  }
+
+  private async runBackgroundCorrection(correction: string, originalRequest: string, context: ToolContext, conversationId: string) {
+    console.log(`  🔁 Jev background correction for ${this.config.name}`);
+    const fixed = await this.chat(correction, { ...context, agentId: this.config.id }, conversationId);
+    const review = await BaseAgent.takeTurnReview(conversationId);
+    await deliverAgentMessage({
+      storeId: context.storeId,
+      agentId: this.config.id,
+      agentName: this.config.name,
+      response: fixed,
+      task: originalRequest,
+      header: '🔁 Version corrigée après contrôle qualité Jev',
+      qualityWarning: review?.rating === 'poor' ? review.warning : undefined,
+    });
+  }
 
   /** Quality review of the latest turn in a conversation, if it completes within timeoutMs. */
   static async takeTurnReview(conversationId: string, timeoutMs = 20_000): Promise<TurnReview | undefined> {
@@ -203,6 +246,9 @@ export class BaseAgent {
     conversationId: string = 'default',
     attachments: ChatAttachment[] = []
   ): Promise<string> {
+    const isCorrection = message.startsWith(CORRECTION_MARKER);
+    const turnNo = (BaseAgent.turnCounter.get(conversationId) ?? 0) + 1;
+    BaseAgent.turnCounter.set(conversationId, turnNo);
     const attachmentLog = attachments.length > 0 ? ` (+${attachments.length} image(s))` : '';
     console.log(`\n💬 Agent ${this.config.name} received: "${message}"${attachmentLog}`);
 
@@ -520,6 +566,8 @@ export class BaseAgent {
           const slug = legacyMatch[1].trim();
           const title = legacyMatch[2].trim();
           const content = processedResponse.replace(/\[LIVRABLE:[^\]]+\]\s*/g, '').trim();
+          livrableContent = content;
+          livrableTitle = title;
           try {
             const saved = await saveLivrable({
               slug,
@@ -572,6 +620,7 @@ export class BaseAgent {
         request: message,
         response: processedResponse,
         toolTrace,
+        isCorrection,
         livrables: livrableContent
           ? [{ source: 'armada', title: livrableTitle, content: livrableContent.slice(0, 6000) }]
           : [],
@@ -583,6 +632,19 @@ export class BaseAgent {
       void review.finally(() => setTimeout(() => {
         if (BaseAgent.pendingReviews.get(conversationId) === review) BaseAgent.pendingReviews.delete(conversationId);
       }, 60_000));
+
+      // Direct conversations: nobody awaits the review, so a correctable problem is fixed in the background
+      // and the corrected answer is pushed. Dispatchers (qualityControl: 'caller') handle corrections themselves.
+      if (context.qualityControl !== 'caller' && !isCorrection) {
+        void review.then(r => {
+          if (!r?.correction) return;
+          if (BaseAgent.turnCounter.get(conversationId) !== turnNo) {
+            console.log(`  ↷ Jev correction skipped for ${this.config.name}: conversation moved on`);
+            return;
+          }
+          return this.runBackgroundCorrection(r.correction, message, context, conversationId);
+        }).catch(err => console.warn('  ⚠️ Jev background correction failed:', err));
+      }
 
       return processedResponse;
     } catch (error) {

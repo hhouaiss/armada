@@ -26,8 +26,8 @@ const FEATURES: Record<string, { label: string; description: string; outcomes: s
   },
   output_review: {
     label: 'Contrôle qualité',
-    description: 'Chaque réponse d’agent est relue par Jev. Les défauts récurrents deviennent des règles de coaching, retirées quand le défaut disparaît.',
-    outcomes: ['rating:good', 'rating:weak', 'rating:poor', 'flag:unsupported_claims', 'flag:hidden_tool_error', 'flag:language', 'flag:livrable', 'notion_read', 'notion_unreadable', 'lesson_added', 'lesson_retired', 'memory_saved', 'fallback_error'],
+    description: 'Chaque réponse d’agent est relue par Jev. Un problème corrigeable (livrable manquant, affirmations non étayées…) déclenche une correction automatique par l’agent ; les défauts récurrents deviennent des règles de coaching.',
+    outcomes: ['rating:good', 'rating:weak', 'rating:poor', 'flag:unsupported_claims', 'flag:hidden_tool_error', 'flag:language', 'flag:livrable', 'flag:livrable_missing', 'correction_requested', 'correction_fixed', 'correction_failed', 'notion_read', 'notion_unreadable', 'lesson_added', 'lesson_retired', 'memory_saved', 'fallback_error'],
   },
   approval_risk: {
     label: 'Risque des approbations',
@@ -56,6 +56,10 @@ const OUTCOMES: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 
   'flag:hidden_tool_error': { label: 'Échec d’outil masqué', tone: 'bad' },
   'flag:language': { label: 'Mauvaise langue', tone: 'bad' },
   'flag:livrable': { label: 'Livrable inutilisable', tone: 'bad' },
+  'flag:livrable_missing': { label: 'Livrable manquant', tone: 'bad' },
+  correction_requested: { label: 'Correction demandée', tone: 'warn' },
+  correction_fixed: { label: 'Corrigé par l’agent', tone: 'good' },
+  correction_failed: { label: 'Correction insuffisante', tone: 'bad' },
   notion_read: { label: 'Pages Notion relues', tone: 'good' },
   notion_unreadable: { label: 'Notion illisible', tone: 'warn' },
   memory_saved: { label: 'Mémorisé chez l’agent', tone: 'neutral' },
@@ -81,6 +85,7 @@ const SCORE_LABELS: Record<string, string> = {
   language_mismatch: 'Langue',
   tool_issue_disclosed: 'Échec signalé',
   livrable_quality: 'Livrable /3',
+  deliverable_expected: 'Livrable attendu',
 };
 
 function journalKey(name: string) {

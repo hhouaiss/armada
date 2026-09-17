@@ -87,6 +87,24 @@ export function buildReviewQuestions(input: TurnInput): Record<string, Question>
         false: 'Same language, e.g. both in French.',
       },
     },
+    deliverable_expected: {
+      type: 'noul',
+      instructions:
+        'Does `request` ask the agent to produce a substantial written deliverable meant to be kept and reused (a document, report, audit, full email or newsletter, article, guide, plan or page), rather than a quick answer, a check, a short list or an action on the store?',
+      criteria: {
+        true: 'A substantial deliverable is expected.',
+        false: 'A quick answer, a short list, a check or a store action is expected.',
+      },
+    },
+    claims_delivered: {
+      type: 'noul',
+      instructions:
+        'Does `response` tell the merchant that a deliverable was created, saved or is available somewhere (Livrables, Notion, a document, a page)?',
+      criteria: {
+        true: 'The response says a deliverable exists or was saved.',
+        false: 'The response does not claim any saved deliverable.',
+      },
+    },
     main_weakness: {
       type: 'choice',
       instructions: `What is the single most important weakness of ${work} as an answer to \`request\`?`,

@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
       const date = new Date(Date.now() - d * 86_400_000).toISOString().slice(0, 10);
       daily.set(date, { date, calls: 0, errors: 0, actions: 0, latencySum: 0, answered: 0, cost: 0 });
     }
-    const ACTIONS = new Set(['name_resolved', 'mode_upgraded', 'misroute_flagged', 'risk_raised', 'rating:poor']);
+    const ACTIONS = new Set(['name_resolved', 'mode_upgraded', 'misroute_flagged', 'risk_raised', 'rating:poor', 'correction_requested']);
     for (const c of calls) {
       const day = daily.get(c.createdAt.toISOString().slice(0, 10));
       if (!day) continue;

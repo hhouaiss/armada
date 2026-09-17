@@ -26,6 +26,8 @@ export interface ToolContext {
   sessionManager?: import('../core/session-manager.js').SessionManager;
   /** Set only by the approval executor after atomically claiming a request. */
   approvalGranted?: boolean;
+  /** 'caller': the caller awaits the quality review and runs corrections itself (dispatch). */
+  qualityControl?: 'caller';
 }
 
 export interface ToolResult {

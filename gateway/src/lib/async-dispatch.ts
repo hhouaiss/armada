@@ -1,7 +1,7 @@
 import { ToolContext } from '../types/operations.js';
 import { MemoryEngine, markTaskRunning, clearTaskRunning } from './memory-engine.js';
 import { saveChatMessage, prisma } from './database.js';
-import { BaseAgent } from '../agents/base-agent.js';
+import type { BaseAgent } from '../agents/base-agent.js';
 
 /**
  * Async dispatch — running a specialist outside the request/response cycle.
@@ -31,7 +31,7 @@ export function setAsyncDispatchBroadcaster(fn: BroadcastFn): void {
 
 interface BackgroundDispatch {
   /** The specialist agent instance resolved from the router. */
-  agent: { config: { id: string; name: string }; chat: Function };
+  agent: BaseAgent;
   task: string;
   context: ToolContext;
   conversationId: string;
@@ -58,13 +58,20 @@ async function execute({ agent, task, context, conversationId, taskId }: Backgro
 
   markTaskRunning(conversationId, taskId);
   try {
-    const response: string = await agent.chat(task, { ...context, agentId: agent.config.id }, conversationId);
+    const { response, review, corrected } = await agent.chatWithQualityControl(task, context, conversationId);
     const elapsed = Math.round((Date.now() - started) / 1000);
-    console.log(`✓ Async dispatch done: ${name} in ${elapsed}s`);
+    console.log(`✓ Async dispatch done: ${name} in ${elapsed}s${corrected ? ' (corrected after Jev review)' : ''}`);
 
     await engine.completeInboxTask(agent.config.id, taskId, { result: response });
-    const quality = await BaseAgent.takeTurnReview(conversationId);
-    await deliver(storeId, agent.config.id, name, response, task, quality?.warning);
+    await deliverAgentMessage({
+      storeId,
+      agentId: agent.config.id,
+      agentName: name,
+      response,
+      task,
+      header: corrected ? `✅ *${name}* a terminé sa tâche (corrigée après contrôle qualité Jev)` : undefined,
+      qualityWarning: review?.rating === 'poor' ? review.warning : undefined,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`✗ Async dispatch failed: ${name} — ${message}`);
@@ -72,13 +79,13 @@ async function execute({ agent, task, context, conversationId, taskId }: Backgro
     await engine
       .completeInboxTask(agent.config.id, taskId, { status: 'failed', result: message })
       .catch(() => {});
-    await deliver(
+    await deliverAgentMessage({
       storeId,
-      agent.config.id,
-      name,
-      `⚠️ La tâche a échoué : ${message}`,
-      task
-    );
+      agentId: agent.config.id,
+      agentName: name,
+      response: `⚠️ La tâche a échoué : ${message}`,
+      task,
+    });
   } finally {
     clearTaskRunning(conversationId);
   }
@@ -88,14 +95,23 @@ async function execute({ agent, task, context, conversationId, taskId }: Backgro
  * Persists the result in the agent's chat history (so the web UI shows it on
  * reload) and pushes it live to Telegram + subscribed WebSocket clients.
  */
-async function deliver(
-  storeId: string,
-  agentId: string,
-  agentName: string,
-  response: string,
-  task: string,
-  qualityWarning?: string
-): Promise<void> {
+export async function deliverAgentMessage({
+  storeId,
+  agentId,
+  agentName,
+  response,
+  task,
+  header: customHeader,
+  qualityWarning,
+}: {
+  storeId: string;
+  agentId: string;
+  agentName: string;
+  response: string;
+  task: string;
+  header?: string;
+  qualityWarning?: string;
+}): Promise<void> {
   await saveChatMessage({
     storeId,
     agentId,
@@ -108,7 +124,7 @@ async function deliver(
 
   if (telegramNotifier) {
     const header =
-      `✅ *${agentName}* a terminé sa tâche\n_${truncate(task, 120)}_\n\n` +
+      `${customHeader ?? `✅ *${agentName}* a terminé sa tâche`}\n_${truncate(task, 120)}_\n\n` +
       (qualityWarning ? `⚠️ ${qualityWarning} À relire avant utilisation.\n\n` : '');
     await telegramNotifier(storeId, header + truncate(response, 3500), false).catch((err) =>
       console.error('Async dispatch: Telegram notify failed:', err)
