@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS "typesafe_calls" (
     "model" TEXT NOT NULL DEFAULT 'jev-latest',
     "status" TEXT NOT NULL,
     "outcomes" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "agentId" TEXT,
     "agentName" TEXT,
     "requestedValue" TEXT,
     "resolvedValue" TEXT,
@@ -17,11 +16,8 @@ CREATE TABLE IF NOT EXISTS "typesafe_calls" (
     "httpStatus" INTEGER,
     "error" TEXT,
     "taskPreview" TEXT,
-    "outputPreview" TEXT,
-    "evidence" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "typesafe_calls_pkey" PRIMARY KEY ("id")
 );
 CREATE INDEX IF NOT EXISTS "typesafe_calls_storeId_createdAt_idx" ON "typesafe_calls"("storeId", "createdAt");
 CREATE INDEX IF NOT EXISTS "typesafe_calls_feature_createdAt_idx" ON "typesafe_calls"("feature", "createdAt");
-CREATE INDEX IF NOT EXISTS "typesafe_calls_agentId_feature_createdAt_idx" ON "typesafe_calls"("agentId", "feature", "createdAt");

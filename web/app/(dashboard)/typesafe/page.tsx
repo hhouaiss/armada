@@ -5,7 +5,12 @@ import useSWR from 'swr';
 import { Loader2 } from 'lucide-react';
 import { useActiveStore } from '@/lib/hooks/useActiveStore';
 
-const fetcher = (url: string) => fetch(url).then(r => r.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `Erreur ${res.status}`);
+  return body;
+};
 
 const WINDOWS = [
   { days: 1, label: '24 h' },
@@ -294,7 +299,7 @@ export default function TypeSafePage() {
   const [feature, setFeature] = useState<string>('');
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const { data, isLoading } = useSWR(
+  const { data, error, isLoading } = useSWR(
     activeStoreId ? `/api/typesafe?storeId=${activeStoreId}&days=${days}${feature ? `&feature=${feature}` : ''}` : null,
     fetcher,
     { refreshInterval: 15000 },
@@ -339,7 +344,13 @@ export default function TypeSafePage() {
       </div>
 
       <div className="p-6 max-w-6xl mx-auto space-y-6">
-        {isLoading || !s ? (
+        {!activeStoreId ? (
+          <p className="text-center py-16 text-sm font-mono text-[var(--armada-text)]/40">Sélectionnez une boutique pour voir l’activité TypeSafe.</p>
+        ) : error ? (
+          <div className="rounded-2xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-500">
+            Impossible de charger les données TypeSafe : {error.message}
+          </div>
+        ) : isLoading || !s ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-5 w-5 animate-spin text-[var(--armada-text)]/30" />
           </div>
