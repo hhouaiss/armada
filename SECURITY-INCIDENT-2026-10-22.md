@@ -22,6 +22,13 @@ ne rien rechiffrer**.
 - Le web (Vercel, `www.armadahq.app`) est **toujours en ligne**.
 - Configuration Railway sauvegardée dans `RAILWAY-RESTORE.md`.
 
+## Fait (vérifié le 2026-10-22)
+- App Shopify désinstallée, web Vercel en pause.
+- Railway : services `armada` et `Postgres` supprimés.
+- Supabase : secrets purgés (0 token boutique, 0 clé LLM, 0 intégration chiffrée).
+- Reste : service Railway `connector-runner` (variables encore présentes), révocation des clés
+  chez les fournisseurs.
+
 ## 0. Couper
 - [ ] Railway : supprimer (ou mettre à l'arrêt) les services gateway et connector-runner, et
       **supprimer toutes leurs variables** — un service à l'arrêt garde ses variables.
