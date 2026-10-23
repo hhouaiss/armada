@@ -24,10 +24,10 @@ ne rien rechiffrer**.
 
 ## Fait (vérifié le 2026-10-22)
 - App Shopify désinstallée, web Vercel en pause.
-- Railway : services `armada` et `Postgres` supprimés.
+- Railway : services `armada`, `Postgres` et `connector-runner` supprimés (projet vide).
 - Supabase : secrets purgés (0 token boutique, 0 clé LLM, 0 intégration chiffrée).
-- Reste : service Railway `connector-runner` (variables encore présentes), révocation des clés
-  chez les fournisseurs.
+- Clés révoquées chez les fournisseurs (confirmé par le propriétaire le 2026-10-23).
+- Incident clos côté Armada. Pour redémarrer : `RAILWAY-RESTORE.md`.
 
 ## 0. Couper
 - [ ] Railway : supprimer (ou mettre à l'arrêt) les services gateway et connector-runner, et
